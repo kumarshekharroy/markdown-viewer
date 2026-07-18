@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Markdown Viewer icon</title>
+  <desc id="desc">A folded document with a calm reading mark.</desc>
+  <rect width="128" height="128" rx="28" fill="#f7f5ef"/>
+  <path d="M35 18h38l20 20v72H35z" fill="#ffffff" stroke="#1f2937" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M73 18v22h22" fill="#d7f0ea" stroke="#1f2937" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M48 54h32M48 69h26M48 84h32" stroke="#1f2937" stroke-width="6" stroke-linecap="round"/>
+  <path d="M28 99c12 8 30 11 51 4" stroke="#0f766e" stroke-width="8" stroke-linecap="round"/>
+</svg>

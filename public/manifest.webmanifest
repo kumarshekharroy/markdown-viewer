@@ -1,0 +1,19 @@
+{
+  "name": "Markdown Viewer",
+  "short_name": "MarkV",
+  "description": "A private, offline-capable Markdown viewer and lightweight editor.",
+  "id": "/markdown-viewer/",
+  "start_url": "/markdown-viewer/",
+  "scope": "/markdown-viewer/",
+  "display": "standalone",
+  "background_color": "#f7f5ef",
+  "theme_color": "#f7f5ef",
+  "icons": [
+    {
+      "src": "/markdown-viewer/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

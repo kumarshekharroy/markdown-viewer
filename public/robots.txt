@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /markdown-viewer/
+
+Sitemap: https://shekharroy.com/markdown-viewer/sitemap.xml
