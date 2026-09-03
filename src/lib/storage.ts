@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { DraftRecord, RecentDocument } from '../types';
+import type { DraftRecord, RecentDocument, WorkspaceSession } from '../types';
 
 interface MarkdownViewerDb extends DBSchema {
   drafts: {
@@ -12,20 +12,37 @@ interface MarkdownViewerDb extends DBSchema {
     value: RecentDocument;
     indexes: { 'by-updated': number };
   };
+  workspace: {
+    key: string;
+    value: WorkspaceSession;
+  };
 }
 
 let dbPromise: Promise<IDBPDatabase<MarkdownViewerDb>> | undefined;
 const memoryDrafts = new Map<string, DraftRecord>();
 const memoryRecent = new Map<string, RecentDocument>();
-const PREFERENCE_KEYS = ['markdown-viewer-preferences', 'quietmark-preferences'];
+let memoryWorkspace: WorkspaceSession | undefined;
+const PREFERENCE_KEYS = [
+  'markdown-viewer-preferences',
+  'quietmark-preferences',
+  'markdown-viewer-tree-state'
+];
+const SCROLL_POSITIONS_KEY = 'markdown-viewer-scroll-positions';
 
 function getDb(): Promise<IDBPDatabase<MarkdownViewerDb>> {
-  dbPromise ??= openDB<MarkdownViewerDb>('quietmark', 1, {
+  dbPromise ??= openDB<MarkdownViewerDb>('quietmark', 2, {
     upgrade(db) {
-      const drafts = db.createObjectStore('drafts', { keyPath: 'id' });
-      drafts.createIndex('by-updated', 'updatedAt');
-      const recent = db.createObjectStore('recent', { keyPath: 'id' });
-      recent.createIndex('by-updated', 'updatedAt');
+      if (!db.objectStoreNames.contains('drafts')) {
+        const drafts = db.createObjectStore('drafts', { keyPath: 'id' });
+        drafts.createIndex('by-updated', 'updatedAt');
+      }
+      if (!db.objectStoreNames.contains('recent')) {
+        const recent = db.createObjectStore('recent', { keyPath: 'id' });
+        recent.createIndex('by-updated', 'updatedAt');
+      }
+      if (!db.objectStoreNames.contains('workspace')) {
+        db.createObjectStore('workspace', { keyPath: 'id' });
+      }
     }
   });
   return dbPromise;
@@ -91,17 +108,42 @@ export async function removeRecent(id: string): Promise<void> {
   await db.delete('recent', id);
 }
 
+export async function saveWorkspaceSession(session: WorkspaceSession): Promise<void> {
+  if (!hasIndexedDb()) {
+    memoryWorkspace = session;
+    return;
+  }
+  const db = await getDb();
+  try {
+    await db.put('workspace', session);
+  } catch {
+    // Some engines cannot clone file-system handles. The content and UI state can
+    // still be restored even when direct-save permission cannot be retained.
+    await db.put('workspace', withoutFileHandles(session));
+  }
+}
+
+export async function getWorkspaceSession(): Promise<WorkspaceSession | undefined> {
+  if (!hasIndexedDb()) return memoryWorkspace;
+  const db = await getDb();
+  return db.get('workspace', 'current');
+}
+
 export async function clearApplicationData(): Promise<void> {
   if (!hasIndexedDb()) {
     memoryDrafts.clear();
     memoryRecent.clear();
+    memoryWorkspace = undefined;
     PREFERENCE_KEYS.forEach((key) => localStorage.removeItem(key));
+    localStorage.removeItem(SCROLL_POSITIONS_KEY);
     return;
   }
   const db = await getDb();
   await db.clear('drafts');
   await db.clear('recent');
+  await db.clear('workspace');
   PREFERENCE_KEYS.forEach((key) => localStorage.removeItem(key));
+  localStorage.removeItem(SCROLL_POSITIONS_KEY);
 }
 
 function hasIndexedDb(): boolean {
@@ -113,4 +155,24 @@ function trimMemoryRecent(): void {
   for (const item of sorted.slice(12)) {
     memoryRecent.delete(item.id);
   }
+}
+
+function withoutFileHandles(session: WorkspaceSession): WorkspaceSession {
+  return {
+    ...session,
+    document: {
+      ...session.document,
+      fileHandle: undefined,
+      canDirectSave: false
+    },
+    folder: session.folder
+      ? {
+          ...session.folder,
+          documents: session.folder.documents.map((document) => ({
+            ...document,
+            fileHandle: undefined
+          }))
+        }
+      : undefined
+  };
 }

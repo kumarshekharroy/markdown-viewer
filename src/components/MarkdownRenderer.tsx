@@ -1,8 +1,18 @@
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
 import { Check, Copy, ExternalLink, ImageOff, Link as LinkIcon } from 'lucide-react';
-import { createElement, useEffect, useId, useLayoutEffect, useMemo, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import {
+  createContext,
+  createElement,
+  memo,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useState
+} from 'react';
+import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
@@ -23,7 +33,21 @@ interface MarkdownRendererProps {
   articleRef: React.RefObject<HTMLElement>;
 }
 
-export function MarkdownRenderer({
+interface RenderContext {
+  dark: boolean;
+  codeWrap: boolean;
+  currentPath?: string;
+  resolveAsset: MarkdownRendererProps['resolveAsset'];
+  onNavigateLocal: MarkdownRendererProps['onNavigateLocal'];
+}
+const RendererContext = createContext<RenderContext>({
+  dark: false,
+  codeWrap: false,
+  resolveAsset: () => undefined,
+  onNavigateLocal: () => undefined
+});
+
+export const MarkdownRenderer = memo(function MarkdownRenderer({
   markdown,
   toc,
   preferences,
@@ -33,158 +57,177 @@ export function MarkdownRenderer({
   onNavigateLocal,
   articleRef
 }: MarkdownRendererProps) {
-  const components = {
-    h1: createHeading(1),
-    h2: createHeading(2),
-    h3: createHeading(3),
-    h4: createHeading(4),
-    h5: createHeading(5),
-    h6: createHeading(6),
-    a: LinkRenderer,
-    img: ImageRenderer,
-    code: CodeRenderer,
-    table: TableRenderer
-  };
-
+  const zoomScale = preferences.zoom / 100;
+  const context = useMemo(
+    () => ({ dark, codeWrap: preferences.codeWrap, currentPath, resolveAsset, onNavigateLocal }),
+    [dark, preferences.codeWrap, currentPath, resolveAsset, onNavigateLocal]
+  );
   useLayoutEffect(() => {
-    const headings = articleRef.current?.querySelectorAll<HTMLElement>(
-      'h1.doc-heading, h2.doc-heading, h3.doc-heading, h4.doc-heading, h5.doc-heading, h6.doc-heading'
-    );
-    headings?.forEach((heading, index) => {
-      const item = toc[index];
-      if (item) {
-        heading.id = item.id;
-      }
+    articleRef.current?.querySelectorAll<HTMLElement>('.doc-heading').forEach((heading, index) => {
+      if (toc[index]) heading.id = toc[index].id;
     });
-  });
+  }, [articleRef, toc, markdown]);
 
-  function createHeading(level: number) {
-    const tagName = `h${level}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
-    return function Heading({ children, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-      const copyLink = async (event: React.MouseEvent<HTMLButtonElement>) => {
-        const id = event.currentTarget.closest('.doc-heading')?.id;
-        if (!id) return;
-        await navigator.clipboard?.writeText(`${window.location.href.split('#')[0]}#${id}`);
-      };
-
-      return createElement(
-        tagName,
-        { ...props, className: 'doc-heading' },
-        <>
-          <span>{children}</span>
-          <button
-            className="heading-anchor"
-            type="button"
-            onClick={copyLink}
-            aria-label="Copy link to heading"
-          >
-            <LinkIcon size={15} aria-hidden="true" />
-          </button>
-        </>
-      );
-    };
-  }
-
-  function LinkRenderer({ href = '', children, ...props }: React.ComponentPropsWithoutRef<'a'>) {
-    if (!isSafeLinkUrl(href)) {
-      return (
-        <span className="blocked-link" title="Unsafe link blocked">
-          {children}
-        </span>
-      );
-    }
-
-    if (currentPath && isMarkdownLink(href)) {
-      return (
-        <a
-          {...props}
-          href={href}
-          onClick={(event) => {
-            event.preventDefault();
-            onNavigateLocal(href);
-          }}
+  return (
+    <RendererContext.Provider value={context}>
+      <div
+        className={`markdown-frame ${preferences.fullWidth ? 'markdown-frame--full' : ''}`}
+        style={
+          {
+            '--reader-width': `${preferences.contentWidth}px`
+          } as React.CSSProperties
+        }
+      >
+        <article
+          ref={articleRef}
+          className={`markdown-body markdown-body--${preferences.fontChoice}`}
+          style={
+            {
+              '--reader-font-size': `${preferences.fontSize}px`,
+              '--reader-font-weight': String(preferences.fontWeight),
+              '--reader-heading-weight': String(Math.min(900, preferences.fontWeight + 400)),
+              '--reader-line-height': String(preferences.lineHeight),
+              width: '100%',
+              zoom: zoomScale
+            } as React.CSSProperties
+          }
         >
-          {children}
-        </a>
-      );
-    }
+          <MarkdownContent markdown={markdown} />
+        </article>
+      </div>
+    </RendererContext.Provider>
+  );
+});
 
-    const external =
-      href && !href.startsWith('#') && !href.startsWith('/') && !href.startsWith('.');
+// Component identities and plugin arrays never change. UI-only updates do not
+// reparse Markdown or remount stateful diagrams, images and copy buttons.
+const COMPONENTS: Components = {
+  h1: createHeading(1),
+  h2: createHeading(2),
+  h3: createHeading(3),
+  h4: createHeading(4),
+  h5: createHeading(5),
+  h6: createHeading(6),
+  a: LinkRenderer,
+  img: ImageRenderer,
+  code: CodeRenderer,
+  table: TableRenderer
+};
+const REMARK_PLUGINS = [remarkGfm, remarkMath];
+const REHYPE_PLUGINS = [rehypeSanitize, rehypeKatex];
+const MarkdownContent = memo(function MarkdownContent({ markdown }: { markdown: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+      components={COMPONENTS}
+    >
+      {markdown}
+    </ReactMarkdown>
+  );
+});
+
+function createHeading(level: number) {
+  return function Heading(allProps: React.HTMLAttributes<HTMLHeadingElement> & ExtraProps) {
+    const { children, ...props } = withoutNode(allProps);
+    const copyLink = async (event: React.MouseEvent<HTMLButtonElement>) => {
+      const id = event.currentTarget.closest('.doc-heading')?.id;
+      if (id) await navigator.clipboard?.writeText(`${window.location.href.split('#')[0]}#${id}`);
+    };
+    return createElement(
+      `h${level}`,
+      { ...props, className: 'doc-heading' },
+      <>
+        <span>{children}</span>
+        <button
+          className="heading-anchor"
+          type="button"
+          onClick={copyLink}
+          aria-label="Copy link to heading"
+        >
+          <LinkIcon size={15} aria-hidden="true" />
+        </button>
+      </>
+    );
+  };
+}
+
+function LinkRenderer(allProps: React.ComponentPropsWithoutRef<'a'> & ExtraProps) {
+  const { href: originalHref = '', children, ...props } = withoutNode(allProps);
+  // GFM already prefixes footnote IDs; sanitization adds its own safety prefix.
+  // Keep that protection and point the generated reference/backlink at its target.
+  const footnote = 'data-footnote-ref' in props || 'data-footnote-backref' in props;
+  const href = footnote ? originalHref.replace(/^#/, '#user-content-') : originalHref;
+  const { currentPath, onNavigateLocal } = useContext(RendererContext);
+  if (!isSafeLinkUrl(href))
+    return (
+      <span className="blocked-link" title="Unsafe link blocked">
+        {children}
+      </span>
+    );
+  if (currentPath && isMarkdownLink(href)) {
     return (
       <a
         {...props}
         href={href}
-        rel={external ? 'noopener noreferrer' : undefined}
-        target={external ? '_blank' : undefined}
+        onClick={(event) => {
+          event.preventDefault();
+          onNavigateLocal(href);
+        }}
       >
         {children}
-        {external ? (
-          <ExternalLink className="inline-link-icon" size={14} aria-hidden="true" />
-        ) : null}
       </a>
     );
   }
-
-  function ImageRenderer({ src = '', alt = '', ...props }: React.ComponentPropsWithoutRef<'img'>) {
-    return <SafeImage {...props} src={src} alt={alt} resolveAsset={resolveAsset} />;
-  }
-
-  function CodeRenderer({
-    inline,
-    className,
-    children,
-    ...props
-  }: React.ComponentPropsWithoutRef<'code'> & { inline?: boolean }) {
-    const rawCode = String(children);
-    const isInline = inline === true || (!className && !rawCode.includes('\n'));
-    const code = rawCode.replace(/\n$/, '');
-    const language = /language-([\w-]+)/.exec(className ?? '')?.[1]?.toLowerCase();
-
-    if (isInline) {
-      return (
-        <code {...props} className="inline-code">
-          {children}
-        </code>
-      );
-    }
-
-    if (language === 'mermaid') {
-      return <MermaidBlock chart={code} dark={dark} />;
-    }
-
-    return <CodeBlock code={code} language={language} wrap={preferences.codeWrap} />;
-  }
-
-  function TableRenderer({ children, ...props }: React.ComponentPropsWithoutRef<'table'>) {
-    return (
-      <div className="table-scroll" tabIndex={0}>
-        <table {...props}>{children}</table>
-      </div>
-    );
-  }
-
+  const external = href && !href.startsWith('#') && !href.startsWith('/') && !href.startsWith('.');
   return (
-    <article
-      ref={articleRef}
-      className={`markdown-body markdown-body--${preferences.fontChoice}`}
-      style={
-        {
-          '--reader-font-size': `${preferences.fontSize}px`,
-          '--reader-line-height': String(preferences.lineHeight),
-          '--reader-width': `${preferences.contentWidth}px`
-        } as React.CSSProperties
-      }
+    <a
+      {...props}
+      href={href}
+      rel={external ? 'noopener noreferrer' : undefined}
+      target={external ? '_blank' : undefined}
     >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeSanitize, rehypeKatex]}
-        components={components}
-      >
-        {markdown}
-      </ReactMarkdown>
-    </article>
+      {children}
+      {external ? <ExternalLink className="inline-link-icon" size={14} aria-hidden="true" /> : null}
+    </a>
   );
+}
+
+function ImageRenderer({ src = '', alt = '', title }: React.ComponentPropsWithoutRef<'img'>) {
+  const { resolveAsset } = useContext(RendererContext);
+  return (
+    <SafeImage
+      key={resolveAsset(src) ?? src}
+      src={src}
+      alt={alt}
+      title={title}
+      resolveAsset={resolveAsset}
+    />
+  );
+}
+
+function CodeRenderer({ className, children }: React.ComponentPropsWithoutRef<'code'>) {
+  const { dark, codeWrap } = useContext(RendererContext);
+  const rawCode = String(children);
+  const code = rawCode.replace(/\n$/, '');
+  const language = /language-([\w-]+)/.exec(className ?? '')?.[1]?.toLowerCase();
+  if (!className && !rawCode.includes('\n')) return <code className="inline-code">{children}</code>;
+  if (language === 'mermaid') return <MermaidBlock chart={code} dark={dark} />;
+  return <CodeBlock code={code} language={language} wrap={codeWrap} />;
+}
+
+function TableRenderer({ children }: React.ComponentPropsWithoutRef<'table'>) {
+  return (
+    <div className="table-scroll" tabIndex={0}>
+      <table>{children}</table>
+    </div>
+  );
+}
+
+function withoutNode<T extends object>(props: T & ExtraProps): Omit<T, 'node'> {
+  const { node, ...attributes } = props;
+  void node;
+  return attributes;
 }
 
 interface CodeBlockProps {

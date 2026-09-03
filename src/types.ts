@@ -1,13 +1,30 @@
-export type ThemeMode = 'system' | 'light' | 'dark' | 'sepia' | 'mint' | 'sky' | 'plum';
+export type ThemeMode =
+  | 'system'
+  | 'light'
+  | 'dark'
+  | 'sepia'
+  | 'mint'
+  | 'sky'
+  | 'plum'
+  | 'paper'
+  | 'rose'
+  | 'midnight'
+  | 'forest'
+  | 'slate'
+  | 'ember';
 export type FontChoice = 'system' | 'sans' | 'serif' | 'slab' | 'mono' | 'rounded';
 
 export interface Preferences {
   theme: ThemeMode;
   lastThemeOverride: Exclude<ThemeMode, 'system'>;
   fontSize: number;
+  fontWeight: number;
+  zoom: number;
   lineHeight: number;
   contentWidth: number;
+  fullWidth: boolean;
   fontChoice: FontChoice;
+  highContrast: boolean;
   codeWrap: boolean;
   reducedMotion: boolean;
   filePanelVisible: boolean;
@@ -41,6 +58,15 @@ export interface FolderState {
   name: string;
   documents: FolderDocument[];
   assets: Map<string, string>;
+}
+
+export interface WorkspaceSession {
+  id: 'current';
+  document: DocumentState;
+  folder?: Pick<FolderState, 'name' | 'documents'>;
+  expandedFolders: string[];
+  dirty: boolean;
+  updatedAt: number;
 }
 
 export interface TocItem {

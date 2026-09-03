@@ -1,31 +1,43 @@
-import type { EditorView } from '@codemirror/view';
+import { usePanelResize } from './hooks/usePanelResize';
+import { useWorkspacePersistence, loadFolderExpansion } from './hooks/useWorkspacePersistence';
+import { useReaderScroll } from './hooks/useReaderScroll';
+import { loadScrollPosition } from './lib/scrollPositions';
+import { EdgePanelToggle } from './components/SidebarControls';
+import { normalizeDocumentTitle } from './lib/documentTitle';
+import { DEFAULT_PREFS, loadPreferences, resetDockPreferences, clamp } from './lib/preferences';
+import { resolveTheme, isDarkTheme } from './data/themes';
+import { usePreferenceStorage } from './hooks/usePreferenceStorage';
+import { FileTree } from './components/FileTree';
+import { ReadingControls } from './components/ReadingControls';
+import { MoreMenu } from './components/MoreMenu';
+import { TocPanel } from './components/TocPanel';
+import { PreferencesForm } from './components/PreferencesForm';
+import { PanelHeader, PanelResizer } from './components/Panel';
+import { buildFileTree, collectFolderPaths, getParentFolderPaths } from './lib/fileTree';
 import {
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  Download,
-  Edit3,
-  Files,
-  FolderOpen,
-  Info,
-  Monitor,
-  Moon,
-  MoreHorizontal,
-  PanelLeftClose,
-  PanelLeftOpen,
-  PanelRightClose,
-  PanelRightOpen,
-  Printer,
-  RotateCcw,
-  Save,
-  Search,
-  Settings,
-  Sun,
-  TriangleAlert,
-  Upload,
-  X
-} from 'lucide-react';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+  paintRenderedSearchHighlights,
+  clearRenderedSearchHighlights,
+  findRenderedSearchRanges,
+  selectEditorSearchMatch,
+  scrollHeadingIntoView,
+  scrollRangeIntoStage,
+  getScrollRatio,
+  restoreScrollRatio,
+  getReaderScrollElement
+} from './lib/readerNavigation';
+import type { EditorView } from '@codemirror/view';
+import { Check, Edit3, FolderOpen, Moon, Save, Sun, TriangleAlert, Upload, X } from 'lucide-react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import { Dialog } from './components/Dialog';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
 import { exampleDocument } from './data/exampleDocument';
@@ -46,7 +58,6 @@ import {
   convertGitHubBlobUrl,
   countMatches,
   displayNameFromPath,
-  escapeRegExp,
   extractHeadings,
   resolveRelativePath
 } from './lib/markdown';
@@ -54,6 +65,7 @@ import {
   clearApplicationData,
   deleteDraft,
   getRecent,
+  getWorkspaceSession,
   latestDraft,
   removeRecent,
   saveDraft,
@@ -64,61 +76,16 @@ import type {
   DraftRecord,
   FolderDocument,
   FolderState,
-  FontChoice,
   Preferences,
   RecentDocument,
-  SearchOptions,
-  ThemeMode
+  SearchOptions
 } from './types';
 
 const MarkdownEditor = lazy(() =>
   import('./components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 );
 
-const MIN_CONTENT_WIDTH = 600;
-const MAX_CONTENT_WIDTH = 1280;
-
-const DEFAULT_PREFS: Preferences = {
-  theme: 'system',
-  lastThemeOverride: 'dark',
-  fontSize: 18,
-  lineHeight: 1.68,
-  contentWidth: MAX_CONTENT_WIDTH,
-  fontChoice: 'sans',
-  codeWrap: false,
-  reducedMotion: false,
-  filePanelVisible: true,
-  tocVisible: true,
-  filePanelWidth: 280,
-  tocPanelWidth: 296
-};
-
 const APP_NAME = 'Markdown Viewer';
-const PREFS_KEY = 'markdown-viewer-preferences';
-const LEGACY_PREFS_KEY = 'quietmark-preferences';
-const MIN_PANEL_WIDTH = 220;
-const MAX_PANEL_WIDTH = 460;
-const SEARCH_MATCH_HIGHLIGHT = 'markdown-search-match';
-const SEARCH_ACTIVE_HIGHLIGHT = 'markdown-search-active';
-const THEME_MODES: ThemeMode[] = ['system', 'light', 'dark', 'sepia', 'mint', 'sky', 'plum'];
-const THEME_OVERRIDES: Exclude<ThemeMode, 'system'>[] = [
-  'light',
-  'dark',
-  'sepia',
-  'mint',
-  'sky',
-  'plum'
-];
-const FONT_CHOICES: FontChoice[] = ['system', 'sans', 'serif', 'slab', 'mono', 'rounded'];
-const THEME_LABELS: Record<ThemeMode, string> = {
-  system: 'System',
-  light: 'Light',
-  dark: 'Dark',
-  sepia: 'Sepia',
-  mint: 'Mint',
-  sky: 'Sky',
-  plum: 'Plum'
-};
 
 const filePickerTypes = [
   {
@@ -135,15 +102,6 @@ type NoticeTone = 'info' | 'success' | 'warning' | 'error';
 interface Notice {
   message: string;
   tone: NoticeTone;
-}
-
-type PanelSide = 'files' | 'toc';
-type HighlightLike = object;
-type HighlightConstructor = new (...ranges: Range[]) => HighlightLike;
-
-interface HighlightRegistryLike {
-  set(name: string, highlight: HighlightLike): void;
-  delete(name: string): boolean;
 }
 
 export default function App() {
@@ -166,6 +124,8 @@ export default function App() {
     tone: 'info'
   });
   const [folder, setFolder] = useState<FolderState | null>(null);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set());
+  const [workspaceReady, setWorkspaceReady] = useState(false);
   const [recent, setRecent] = useState<RecentDocument[]>([]);
   const [recoverableDraft, setRecoverableDraft] = useState<DraftRecord | undefined>();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -187,6 +147,11 @@ export default function App() {
   const [activeHeading, setActiveHeading] = useState('');
   const [renderedText, setRenderedText] = useState('');
   const [editorView, setEditorView] = useState<EditorView | null>(null);
+  const { startPanelResize, handlePanelResizeKeydown } = usePanelResize(
+    preferences,
+    setPreferences,
+    compactLayout
+  );
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directoryInputRef = useRef<HTMLInputElement>(null);
@@ -195,8 +160,18 @@ export default function App() {
   const scrollContainerRef = useRef<HTMLElement>(null);
   const pendingScrollRatioRef = useRef<number | null>(null);
 
-  const parsed = useMemo(() => parseFrontMatter(documentState.content), [documentState.content]);
+  const deferredContent = useDeferredValue(documentState.content);
+  const contentToParse = isEditing ? deferredContent : documentState.content;
+  const parsed = useMemo(() => parseFrontMatter(contentToParse), [contentToParse]);
   const toc = useMemo(() => extractHeadings(parsed.body), [parsed.body]);
+  const fileTree = useMemo(
+    () => (folder ? buildFileTree(folder.documents, folder.name) : []),
+    [folder]
+  );
+  const documentsByPath = useMemo(
+    () => new Map(folder?.documents.map((entry) => [entry.path, entry])),
+    [folder]
+  );
   const searchText = isEditing ? documentState.content : renderedText || parsed.body;
   const matchCount = useMemo(
     () => countMatches(searchText, searchQuery, searchOptions),
@@ -212,13 +187,50 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    refreshRecent();
+    let active = true;
+    Promise.all([getWorkspaceSession(), getRecent()])
+      .then(([session, recentDocuments]) => {
+        if (!active) return;
+        setRecent(recentDocuments);
+        if (session?.document.content.trim()) {
+          setDocumentState(session.document);
+          setDirty(session.dirty);
+          setFolder(
+            session.folder ? { ...session.folder, assets: new Map<string, string>() } : null
+          );
+          setExpandedFolders(
+            new Set(loadFolderExpansion(session.folder?.name, session.expandedFolders))
+          );
+          setNotice({
+            message: `Restored ${session.document.title} from your last session.`,
+            tone: 'success'
+          });
+        }
+        setWorkspaceReady(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setWorkspaceReady(true);
+        announce('The previous workspace could not be restored.', 'warning');
+      });
+    return () => {
+      active = false;
+    };
+  }, [announce]);
+
+  useEffect(() => {
+    if (!workspaceReady) return;
     latestDraft().then((draft) => {
       if (draft?.dirty && draft.content.trim() && draft.id !== documentState.id) {
         setRecoverableDraft(draft);
       }
     });
-  }, [documentState.id, refreshRecent]);
+  }, [documentState.id, workspaceReady]);
+
+  useWorkspacePersistence(documentState, folder, expandedFolders, dirty, workspaceReady, () =>
+    announce('The current workspace could not be remembered.', 'warning')
+  );
+  useReaderScroll(documentState.id, isEditing, workspaceReady, scrollContainerRef);
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-color-scheme: dark)');
@@ -262,12 +274,12 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
+    document.documentElement.dataset.appearance = dark ? 'dark' : 'light';
     document.documentElement.dataset.motion = preferences.reducedMotion ? 'reduced' : 'full';
-  }, [preferences.reducedMotion, resolvedTheme]);
+    document.documentElement.dataset.contrast = preferences.highContrast ? 'high' : 'normal';
+  }, [dark, preferences.highContrast, preferences.reducedMotion, resolvedTheme]);
 
-  useEffect(() => {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(preferences));
-  }, [preferences]);
+  usePreferenceStorage(preferences);
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -299,11 +311,12 @@ export default function App() {
   }, [announce, dirty, documentState]);
 
   useEffect(() => {
+    if (isEditing || !searchOpen) return;
     const timer = window.setTimeout(() => {
-      setRenderedText(articleRef.current?.innerText ?? '');
+      setRenderedText(articleRef.current?.textContent ?? '');
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [parsed.body, isEditing]);
+  }, [parsed.body, isEditing, searchOpen]);
 
   useEffect(() => {
     if (isEditing || !searchOpen || !searchQuery.trim()) {
@@ -345,25 +358,11 @@ export default function App() {
           setActiveHeading(visible.target.id);
         }
       },
-      { rootMargin: '-20% 0px -65% 0px' }
+      { root: scrollContainerRef.current, rootMargin: '-20% 0px -65% 0px' }
     );
     headings.forEach((heading) => observer.observe(heading));
     return () => observer.disconnect();
   }, [toc, parsed.body, isEditing]);
-
-  useEffect(() => {
-    const container =
-      scrollContainerRef.current ?? document.querySelector<HTMLElement>('.document-stage');
-    if (!container) return undefined;
-    const key = `quietmark-scroll-${documentState.id}`;
-    const saved = Number(sessionStorage.getItem(key) ?? 0);
-    if (saved > 0) {
-      container.scrollTop = saved;
-    }
-    const savePosition = () => sessionStorage.setItem(key, String(container.scrollTop));
-    container.addEventListener('scroll', savePosition, { passive: true });
-    return () => container.removeEventListener('scroll', savePosition);
-  }, [documentState.id, isEditing]);
 
   useEffect(() => {
     if (pendingScrollRatioRef.current === null) return undefined;
@@ -536,10 +535,14 @@ export default function App() {
     });
 
     if (nextFolder.documents.length === 0) {
+      setExpandedFolders(new Set());
       announce('No supported Markdown files were found in that folder.', 'warning');
       return;
     }
 
+    setExpandedFolders(
+      new Set(collectFolderPaths(buildFileTree(nextFolder.documents, nextFolder.name)))
+    );
     const first = nextFolder.documents[0];
     const doc = documentFromFolderDocument(first);
     applyDocument(doc, false);
@@ -570,19 +573,30 @@ export default function App() {
       window.setTimeout(() => scrollToHeading(window.location.hash), 0);
     };
     window.addEventListener('hashchange', handleHashChange);
-    handleHashChange();
+    if (loadScrollPosition(documentState.id) === 0) handleHashChange();
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [isEditing, parsed.body, scrollToHeading]);
+  }, [documentState.id, isEditing, parsed.body, scrollToHeading]);
 
-  const openFolderDocument = async (entry: FolderDocument, hash?: string) => {
-    if (!(await confirmReplace())) return;
-    const doc = documentFromFolderDocument(entry);
-    applyDocument(doc, false);
-    await rememberDocument(doc);
-    if (hash) {
-      window.setTimeout(() => scrollToHeading(hash), 120);
-    }
-  };
+  const openFolderDocument = useCallback(
+    async (entry: FolderDocument, hash?: string) => {
+      if (entry.id === documentState.id) {
+        if (hash) scrollToHeading(hash);
+        return;
+      }
+      if (!(await confirmReplace())) return;
+      if (folder) {
+        const parentPaths = getParentFolderPaths(entry.path, folder.name);
+        setExpandedFolders((current) => new Set([...current, ...parentPaths]));
+      }
+      const doc = documentFromFolderDocument(entry);
+      applyDocument(doc, false);
+      await rememberDocument(doc);
+      if (hash) {
+        window.setTimeout(() => scrollToHeading(hash), 120);
+      }
+    },
+    [documentState.id, confirmReplace, folder, applyDocument, rememberDocument, scrollToHeading]
+  );
 
   const resolveAsset = useCallback(
     (src: string) => {
@@ -592,17 +606,20 @@ export default function App() {
     [documentState.path, folder]
   );
 
-  const navigateLocal = (href: string) => {
-    if (!folder || !documentState.path) return;
-    const hash = href.includes('#') ? `#${href.split('#').slice(1).join('#')}` : undefined;
-    const targetPath = resolveRelativePath(documentState.path, href);
-    const entry = folder.documents.find((item) => item.path === targetPath);
-    if (!entry) {
-      announce('That linked Markdown file was not found in the opened folder.', 'warning');
-      return;
-    }
-    openFolderDocument(entry, hash);
-  };
+  const navigateLocal = useCallback(
+    (href: string) => {
+      if (!folder || !documentState.path) return;
+      const hash = href.includes('#') ? `#${href.split('#').slice(1).join('#')}` : undefined;
+      const targetPath = resolveRelativePath(documentState.path, href);
+      const entry = documentsByPath.get(targetPath);
+      if (!entry) {
+        announce('That linked Markdown file was not found in the opened folder.', 'warning');
+        return;
+      }
+      openFolderDocument(entry, hash);
+    },
+    [folder, documentState.path, documentsByPath, announce, openFolderDocument]
+  );
 
   const saveDocument = async () => {
     try {
@@ -852,10 +869,10 @@ export default function App() {
     await handleFileInput(event.dataTransfer.files);
   };
 
-  const updateContent = (content: string) => {
+  const updateContent = useCallback((content: string) => {
     setDocumentState((current) => ({ ...current, content }));
     setDirty(true);
-  };
+  }, []);
 
   const moveSearch = (direction: 'next' | 'previous') => {
     if (!searchQuery.trim()) return;
@@ -889,19 +906,24 @@ export default function App() {
     }, 0);
   };
 
-  const cycleTheme = () => {
-    setPreferences((current) => {
-      if (current.theme === 'system') {
-        return { ...current, theme: current.lastThemeOverride };
-      }
-
-      return {
-        ...current,
-        lastThemeOverride: current.theme,
-        theme: 'system'
-      };
-    });
+  const resetDock = () => {
+    setPreferences(resetDockPreferences);
+    setMobileFilesOpen(false);
+    setMobileTocOpen(false);
+    announce(
+      'Dock reset. Text size, zoom, weight, contrast and sidebar visibility restored.',
+      'success'
+    );
   };
+
+  const toggleFolderExpanded = useCallback((path: string) => {
+    setExpandedFolders((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
 
   const openSearch = () => {
     setSearchOpen(true);
@@ -914,43 +936,6 @@ export default function App() {
   const closeSearch = () => {
     setSearchOpen(false);
     setSearchCursor(0);
-  };
-
-  const updatePanelWidth = (side: PanelSide, nextWidth: number) => {
-    const key = side === 'files' ? 'filePanelWidth' : 'tocPanelWidth';
-    setPreferences((current) => ({
-      ...current,
-      [key]: clamp(Math.round(nextWidth), MIN_PANEL_WIDTH, MAX_PANEL_WIDTH)
-    }));
-  };
-
-  const startPanelResize = (side: PanelSide, event: React.PointerEvent) => {
-    if (compactLayout) return;
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = side === 'files' ? preferences.filePanelWidth : preferences.tocPanelWidth;
-
-    const onPointerMove = (moveEvent: PointerEvent) => {
-      const delta = moveEvent.clientX - startX;
-      updatePanelWidth(side, side === 'files' ? startWidth + delta : startWidth - delta);
-    };
-    const onPointerUp = () => {
-      window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointerup', onPointerUp);
-    };
-
-    window.addEventListener('pointermove', onPointerMove);
-    window.addEventListener('pointerup', onPointerUp);
-  };
-
-  const handlePanelResizeKeydown = (side: PanelSide, event: React.KeyboardEvent) => {
-    const amount =
-      event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') ? 32 : 12;
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-    event.preventDefault();
-    const sign = event.key === 'ArrowRight' ? 1 : -1;
-    const currentWidth = side === 'files' ? preferences.filePanelWidth : preferences.tocPanelWidth;
-    updatePanelWidth(side, currentWidth + (side === 'files' ? sign : -sign) * amount);
   };
 
   const captureScrollRatio = () => {
@@ -967,8 +952,8 @@ export default function App() {
 
   const toggleFilePanel = () => {
     if (compactLayout) {
-      setMobileFilesOpen(true);
-      setPreferences((current) => ({ ...current, filePanelVisible: true }));
+      setMobileFilesOpen((current) => !current);
+      setMobileTocOpen(false);
       return;
     }
     setPreferences((current) => ({ ...current, filePanelVisible: !current.filePanelVisible }));
@@ -976,8 +961,8 @@ export default function App() {
 
   const toggleTocPanel = () => {
     if (compactLayout) {
-      setMobileTocOpen(true);
-      setPreferences((current) => ({ ...current, tocVisible: true }));
+      setMobileTocOpen((current) => !current);
+      setMobileFilesOpen(false);
       return;
     }
     setPreferences((current) => ({ ...current, tocVisible: !current.tocVisible }));
@@ -997,19 +982,20 @@ export default function App() {
   const appStyle = {
     '--file-panel-width': `${preferences.filePanelWidth}px`,
     '--toc-panel-width': `${preferences.tocPanelWidth}px`,
-    '--viewport-right-offset': `${viewportRightOffset}px`
+    '--viewport-right-offset': `${viewportRightOffset}px`,
+    '--reader-controls-left-space': `${!compactLayout && preferences.filePanelVisible ? preferences.filePanelWidth : 0}px`,
+    '--reader-controls-right-space': `${!compactLayout && preferences.tocVisible ? preferences.tocPanelWidth : 0}px`
   } as React.CSSProperties;
 
-  useEffect(() => {
-    if (!searchOpen) return undefined;
-    const timer = window.setTimeout(() => searchInputRef.current?.focus(), 40);
-    return () => window.clearTimeout(timer);
+  useLayoutEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
   }, [renderTocPanel, searchOpen]);
 
   return (
     <div
       className="app"
       style={appStyle}
+      aria-busy={!workspaceReady}
       onDragOver={(event) => event.preventDefault()}
       onDrop={onDrop}
     >
@@ -1018,7 +1004,9 @@ export default function App() {
           <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" className="brand-icon" />
           <div className="title-block">
             <span className="app-name">{APP_NAME}</span>
-            <strong title={documentState.sourceLabel}>{documentState.title}</strong>
+            <strong title={documentState.sourceLabel}>
+              {normalizeDocumentTitle(documentState.title)}
+            </strong>
           </div>
         </div>
 
@@ -1050,17 +1038,16 @@ export default function App() {
             )}
           </IconToggle>
           <IconToggle
-            label={themeLabel(preferences.theme, dark)}
-            pressed={preferences.theme !== 'system'}
-            onClick={cycleTheme}
+            label={`Switch to ${dark ? 'light' : 'dark'} mode`}
+            onClick={() =>
+              setPreferences((current) => ({
+                ...current,
+                theme: dark ? 'paper' : 'slate',
+                lastThemeOverride: dark ? 'paper' : 'slate'
+              }))
+            }
           >
-            {preferences.theme === 'system' ? (
-              <Monitor size={18} aria-hidden="true" />
-            ) : preferences.theme === 'dark' ? (
-              <Moon size={18} aria-hidden="true" />
-            ) : (
-              <Sun size={18} aria-hidden="true" />
-            )}
+            {dark ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
           </IconToggle>
           <MoreMenu
             canDirectSave={documentState.canDirectSave}
@@ -1138,6 +1125,7 @@ export default function App() {
         {renderFilePanel ? (
           <aside
             className={`file-panel ${mobileFilesOpen ? 'is-open' : ''}`}
+            id="files-panel"
             aria-label="Files and recent documents"
           >
             <PanelHeader
@@ -1168,35 +1156,14 @@ export default function App() {
               <div className="panel-section">
                 <h2>{folder.name}</h2>
                 <nav className="file-tree" aria-label="Folder Markdown files">
-                  {folder.documents.map((entry) => (
-                    <button
-                      key={entry.path}
-                      type="button"
-                      className={[
-                        entry.path === documentState.path ? 'is-active' : '',
-                        dirty && entry.path === documentState.path ? 'is-dirty' : ''
-                      ]
-                        .filter(Boolean)
-                        .join(' ')}
-                      onClick={() => openFolderDocument(entry)}
-                      title={
-                        dirty && entry.path === documentState.path
-                          ? `${entry.path} has unsaved changes`
-                          : entry.path
-                      }
-                    >
-                      {dirty && entry.path === documentState.path ? (
-                        <TriangleAlert
-                          className="file-tree__marker"
-                          size={15}
-                          aria-label="Unsaved changes"
-                        />
-                      ) : (
-                        <Files className="file-tree__marker" size={15} aria-hidden="true" />
-                      )}
-                      <span>{entry.path}</span>
-                    </button>
-                  ))}
+                  <FileTree
+                    nodes={fileTree}
+                    expandedFolders={expandedFolders}
+                    activePath={documentState.path}
+                    dirty={dirty}
+                    onToggleFolder={toggleFolderExpanded}
+                    onOpenDocument={openFolderDocument}
+                  />
                 </nav>
               </div>
             ) : null}
@@ -1280,6 +1247,18 @@ export default function App() {
           ) : null}
         </main>
 
+        <ReadingControls
+          preferences={preferences}
+          setPreferences={setPreferences}
+          filesVisible={renderFilePanel}
+          tocVisible={renderTocPanel}
+          isEditing={isEditing}
+          dirty={dirty}
+          onToggleFiles={toggleFilePanel}
+          onToggleToc={toggleTocPanel}
+          onReset={resetDock}
+        />
+
         {renderTocPanel ? (
           <TocPanel
             open={mobileTocOpen}
@@ -1311,13 +1290,14 @@ export default function App() {
         side="left"
         visible={renderFilePanel}
         dirty={dirty}
-        label={renderFilePanel ? 'Hide file sidebar' : 'Show file sidebar'}
+        panelWidth={preferences.filePanelWidth}
         onClick={toggleFilePanel}
       />
       <EdgePanelToggle
         side="right"
         visible={renderTocPanel}
-        label={renderTocPanel ? 'Hide table of contents' : 'Show table of contents'}
+        panelWidth={preferences.tocPanelWidth}
+        rightOffset={viewportRightOffset}
         onClick={toggleTocPanel}
       />
 
@@ -1358,8 +1338,9 @@ export default function App() {
 
       <Dialog
         open={settingsOpen}
-        title="Reading Preferences"
+        title="Settings"
         onClose={() => setSettingsOpen(false)}
+        className="settings-dialog"
       >
         <PreferencesForm
           preferences={preferences}
@@ -1380,8 +1361,9 @@ export default function App() {
           </p>
           <p>
             Draft recovery stores unsaved Markdown in IndexedDB on this device. Recent documents
-            store metadata and, where the browser supports it, a file handle that still requires
-            permission before reuse.
+            store metadata, and the current workspace stores the open Markdown and folder tree so
+            they can be restored after a reload. Where the browser supports it, file handles still
+            require permission before reuse.
           </p>
           <p>
             Loading a public URL uses the browser's normal network and CORS rules. Markdown Viewer
@@ -1420,586 +1402,12 @@ function IconToggle({
   );
 }
 
-function EdgePanelToggle({
-  side,
-  visible,
-  dirty = false,
-  label,
-  onClick
-}: {
-  side: 'left' | 'right';
-  visible: boolean;
-  dirty?: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  const Icon =
-    side === 'left'
-      ? visible
-        ? PanelLeftClose
-        : PanelLeftOpen
-      : visible
-        ? PanelRightClose
-        : PanelRightOpen;
-  return (
-    <button
-      className={[
-        'edge-toggle',
-        'tooltip-button',
-        `edge-toggle--${side}`,
-        visible ? 'is-open' : '',
-        dirty ? 'is-dirty' : ''
-      ]
-        .filter(Boolean)
-        .join(' ')}
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      aria-pressed={visible}
-      data-tooltip={label}
-    >
-      <Icon size={18} aria-hidden="true" />
-      {dirty ? <span className="edge-toggle__dot" aria-hidden="true" /> : null}
-    </button>
-  );
-}
-
-function PanelResizer({
-  side,
-  label,
-  onPointerDown,
-  onKeyDown
-}: {
-  side: PanelSide;
-  label: string;
-  onPointerDown: (side: PanelSide, event: React.PointerEvent) => void;
-  onKeyDown: (side: PanelSide, event: React.KeyboardEvent) => void;
-}) {
-  return (
-    <div
-      className={`panel-resizer panel-resizer--${side}`}
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={label}
-      tabIndex={0}
-      onPointerDown={(event) => onPointerDown(side, event)}
-      onKeyDown={(event) => onKeyDown(side, event)}
-    />
-  );
-}
-
 function EditorFallback() {
   return (
     <section className="editor-shell editor-shell--loading" aria-label="Markdown editor loading">
       Loading editor...
     </section>
   );
-}
-
-interface MoreMenuProps {
-  canDirectSave: boolean;
-  dirty: boolean;
-  onSave: () => void;
-  onSaveAs: () => void;
-  onOpenFolder: () => void;
-  onCopyRaw: () => void;
-  onCopyRendered: () => void;
-  onDownloadHtml: () => void;
-  onPrint: () => void;
-  onLoadUrl: () => void;
-  onPaste: () => void;
-  onExample: () => void;
-  onSettings: () => void;
-  onPrivacy: () => void;
-  onClearData: () => void;
-}
-
-function MoreMenu({
-  canDirectSave,
-  dirty,
-  onSave,
-  onSaveAs,
-  onOpenFolder,
-  onCopyRaw,
-  onCopyRendered,
-  onDownloadHtml,
-  onPrint,
-  onLoadUrl,
-  onPaste,
-  onExample,
-  onSettings,
-  onPrivacy,
-  onClearData
-}: MoreMenuProps) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const run = (action: () => void) => {
-    setOpen(false);
-    action();
-  };
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (menuRef.current?.contains(event.target as Node)) return;
-      setOpen(false);
-    };
-    const handleKeydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpen(false);
-      }
-    };
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('keydown', handleKeydown);
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('keydown', handleKeydown);
-    };
-  }, [open]);
-
-  return (
-    <div className="more-menu" ref={menuRef}>
-      <button
-        className="icon-button tooltip-button"
-        type="button"
-        aria-label="More actions"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        data-tooltip="More actions"
-      >
-        <MoreHorizontal size={18} aria-hidden="true" />
-      </button>
-      {open ? (
-        <div className="menu-popover">
-          <button type="button" onClick={() => run(onSave)}>
-            <Save size={16} aria-hidden="true" />
-            {canDirectSave ? 'Save' : dirty ? 'Download updated file' : 'Download file'}
-          </button>
-          <button type="button" onClick={() => run(onSaveAs)}>
-            <Download size={16} aria-hidden="true" />
-            Save As
-          </button>
-          <button type="button" onClick={() => run(onOpenFolder)}>
-            <FolderOpen size={16} aria-hidden="true" />
-            Open folder
-          </button>
-          <button type="button" onClick={() => run(onLoadUrl)}>
-            <Upload size={16} aria-hidden="true" />
-            Load URL
-          </button>
-          <button type="button" onClick={() => run(onPaste)}>
-            <Upload size={16} aria-hidden="true" />
-            Paste Markdown
-          </button>
-          <button type="button" onClick={() => run(onExample)}>
-            <Files size={16} aria-hidden="true" />
-            Load example
-          </button>
-          <hr />
-          <button type="button" onClick={() => run(onCopyRaw)}>
-            Copy raw Markdown
-          </button>
-          <button type="button" onClick={() => run(onCopyRendered)}>
-            Copy rendered text
-          </button>
-          <button type="button" onClick={() => run(onDownloadHtml)}>
-            Download rendered HTML
-          </button>
-          <button type="button" onClick={() => run(onPrint)}>
-            <Printer size={16} aria-hidden="true" />
-            Print
-          </button>
-          <hr />
-          <button type="button" onClick={() => run(onSettings)}>
-            <Settings size={16} aria-hidden="true" />
-            Preferences
-          </button>
-          <button type="button" onClick={() => run(onPrivacy)}>
-            <Info size={16} aria-hidden="true" />
-            Privacy
-          </button>
-          <button type="button" onClick={() => run(onClearData)}>
-            <RotateCcw size={16} aria-hidden="true" />
-            Clear local data
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function TocPanel({
-  open,
-  onClose,
-  toc,
-  activeHeading,
-  searchOpen,
-  searchInputRef,
-  searchQuery,
-  searchOptions,
-  searchCursor,
-  matchCount,
-  onOpenSearch,
-  onCloseSearch,
-  onSearchQueryChange,
-  onSearchOptionsChange,
-  onMoveSearch,
-  onNavigateHeading,
-  onResizePointerDown,
-  onResizeKeyDown
-}: {
-  open: boolean;
-  onClose: () => void;
-  toc: ReturnType<typeof extractHeadings>;
-  activeHeading: string;
-  searchOpen: boolean;
-  searchInputRef: React.RefObject<HTMLInputElement>;
-  searchQuery: string;
-  searchOptions: SearchOptions;
-  searchCursor: number;
-  matchCount: number;
-  onOpenSearch: () => void;
-  onCloseSearch: () => void;
-  onSearchQueryChange: (value: string) => void;
-  onSearchOptionsChange: React.Dispatch<React.SetStateAction<SearchOptions>>;
-  onMoveSearch: (direction: 'next' | 'previous') => void;
-  onNavigateHeading: (id: string) => void;
-  onResizePointerDown: (side: PanelSide, event: React.PointerEvent) => void;
-  onResizeKeyDown: (side: PanelSide, event: React.KeyboardEvent) => void;
-}) {
-  return (
-    <aside className={`toc-panel ${open ? 'is-open' : ''}`} aria-label="Table of contents">
-      <PanelHeader
-        title="Contents"
-        onClose={onClose}
-        actions={
-          <button
-            className="panel-action tooltip-button"
-            type="button"
-            onClick={searchOpen ? onCloseSearch : onOpenSearch}
-            aria-label="Find in document"
-            aria-expanded={searchOpen}
-            data-tooltip="Find in document"
-          >
-            <Search size={17} aria-hidden="true" />
-            <span>Find</span>
-          </button>
-        }
-      />
-      {searchOpen ? (
-        <div className="toc-search-block">
-          <section className="toc-search" aria-label="Document search">
-            <label>
-              <span className="visually-hidden">Search text</span>
-              <input
-                ref={searchInputRef}
-                type="text"
-                value={searchQuery}
-                onChange={(event) => onSearchQueryChange(event.target.value)}
-                placeholder="Search this document"
-              />
-            </label>
-            <div className="toc-search__controls">
-              <span className="match-count">
-                {matchCount === 0 ? 'No matches' : `${searchCursor || 1} of ${matchCount}`}
-              </span>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => onMoveSearch('previous')}
-                aria-label="Previous match"
-              >
-                <ChevronLeft size={17} aria-hidden="true" />
-              </button>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => onMoveSearch('next')}
-                aria-label="Next match"
-              >
-                <ChevronRight size={17} aria-hidden="true" />
-              </button>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={onCloseSearch}
-                aria-label="Close search"
-              >
-                <X size={17} aria-hidden="true" />
-              </button>
-            </div>
-            <div className="toc-search__options">
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={searchOptions.caseSensitive}
-                  onChange={(event) =>
-                    onSearchOptionsChange((current) => ({
-                      ...current,
-                      caseSensitive: event.target.checked
-                    }))
-                  }
-                />
-                Case
-              </label>
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={searchOptions.wholeWord}
-                  onChange={(event) =>
-                    onSearchOptionsChange((current) => ({
-                      ...current,
-                      wholeWord: event.target.checked
-                    }))
-                  }
-                />
-                Whole word
-              </label>
-            </div>
-          </section>
-        </div>
-      ) : null}
-      <nav className="toc-list" aria-label="Document headings">
-        {toc.length === 0 ? (
-          <p className="browser-note">Headings in the current document appear here.</p>
-        ) : (
-          toc.map((item) => (
-            <a
-              key={item.id}
-              href={`#${item.id}`}
-              onClick={() => window.setTimeout(() => onNavigateHeading(item.id), 0)}
-              className={activeHeading === item.id ? 'is-active' : ''}
-              style={{ paddingLeft: `${Math.max(0, item.level - 1) * 12 + 8}px` }}
-            >
-              {item.text}
-            </a>
-          ))
-        )}
-      </nav>
-      <PanelResizer
-        side="toc"
-        label="Resize table of contents"
-        onPointerDown={onResizePointerDown}
-        onKeyDown={onResizeKeyDown}
-      />
-    </aside>
-  );
-}
-
-function PanelHeader({
-  title,
-  onClose,
-  actions
-}: {
-  title: string;
-  onClose: () => void;
-  actions?: React.ReactNode;
-}) {
-  return (
-    <div className="panel-header">
-      <h2>{title}</h2>
-      <div className="panel-header__actions">
-        {actions}
-        <button
-          className="icon-button mobile-only"
-          type="button"
-          onClick={onClose}
-          aria-label={`Close ${title}`}
-        >
-          <X size={17} aria-hidden="true" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function PreferencesForm({
-  preferences,
-  setPreferences,
-  onReset
-}: {
-  preferences: Preferences;
-  setPreferences: React.Dispatch<React.SetStateAction<Preferences>>;
-  onReset: () => void;
-}) {
-  return (
-    <div className="preferences-form">
-      <label>
-        Color theme
-        <select
-          value={preferences.theme}
-          onChange={(event) =>
-            setPreferences((current) => {
-              const theme = event.target.value as ThemeMode;
-              return {
-                ...current,
-                theme,
-                lastThemeOverride: theme === 'system' ? current.lastThemeOverride : theme
-              };
-            })
-          }
-        >
-          <option value="system">Follow system</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-          <option value="sepia">Sepia</option>
-          <option value="mint">Mint</option>
-          <option value="sky">Sky</option>
-          <option value="plum">Plum</option>
-        </select>
-      </label>
-      <label>
-        Font size
-        <input
-          type="range"
-          min="15"
-          max="24"
-          value={preferences.fontSize}
-          onChange={(event) =>
-            setPreferences((current) => ({ ...current, fontSize: Number(event.target.value) }))
-          }
-        />
-        <span>{preferences.fontSize}px</span>
-      </label>
-      <label>
-        Line height
-        <input
-          type="range"
-          min="1.35"
-          max="1.9"
-          step="0.05"
-          value={preferences.lineHeight}
-          onChange={(event) =>
-            setPreferences((current) => ({ ...current, lineHeight: Number(event.target.value) }))
-          }
-        />
-        <span>{preferences.lineHeight.toFixed(2)}</span>
-      </label>
-      <label>
-        Content width
-        <input
-          type="range"
-          min={MIN_CONTENT_WIDTH}
-          max={MAX_CONTENT_WIDTH}
-          step="20"
-          value={preferences.contentWidth}
-          onChange={(event) =>
-            setPreferences((current) => ({ ...current, contentWidth: Number(event.target.value) }))
-          }
-        />
-        <span>{preferences.contentWidth}px</span>
-      </label>
-      <label>
-        Reading font
-        <select
-          value={preferences.fontChoice}
-          onChange={(event) =>
-            setPreferences((current) => ({
-              ...current,
-              fontChoice: event.target.value as Preferences['fontChoice']
-            }))
-          }
-        >
-          <option value="system">System UI</option>
-          <option value="sans">Sans-serif</option>
-          <option value="serif">Serif</option>
-          <option value="slab">Slab serif</option>
-          <option value="mono">Monospace</option>
-          <option value="rounded">Rounded</option>
-        </select>
-      </label>
-      <label className="check-label">
-        <input
-          type="checkbox"
-          checked={preferences.codeWrap}
-          onChange={(event) =>
-            setPreferences((current) => ({ ...current, codeWrap: event.target.checked }))
-          }
-        />
-        Wrap code and editor lines
-      </label>
-      <label className="check-label">
-        <input
-          type="checkbox"
-          checked={preferences.filePanelVisible}
-          onChange={(event) =>
-            setPreferences((current) => ({ ...current, filePanelVisible: event.target.checked }))
-          }
-        />
-        Show file sidebar
-      </label>
-      <label className="check-label">
-        <input
-          type="checkbox"
-          checked={preferences.tocVisible}
-          onChange={(event) =>
-            setPreferences((current) => ({ ...current, tocVisible: event.target.checked }))
-          }
-        />
-        Show table of contents
-      </label>
-      <label className="check-label">
-        <input
-          type="checkbox"
-          checked={preferences.reducedMotion}
-          onChange={(event) =>
-            setPreferences((current) => ({ ...current, reducedMotion: event.target.checked }))
-          }
-        />
-        Reduce motion
-      </label>
-      <button className="control-button" type="button" onClick={onReset}>
-        Reset reading preferences
-      </button>
-    </div>
-  );
-}
-
-function themeLabel(theme: ThemeMode, dark: boolean): string {
-  if (theme === 'system') {
-    return `Theme follows system (${dark ? 'dark' : 'light'}). Click to override.`;
-  }
-  return `${THEME_LABELS[theme]} theme override. Click to return to system.`;
-}
-
-function resolveTheme(theme: ThemeMode, systemDark: boolean): Exclude<ThemeMode, 'system'> {
-  return theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
-}
-
-function isDarkTheme(theme: Exclude<ThemeMode, 'system'>): boolean {
-  return theme === 'dark';
-}
-
-function loadPreferences(): Preferences {
-  try {
-    const raw = localStorage.getItem(PREFS_KEY) ?? localStorage.getItem(LEGACY_PREFS_KEY);
-    if (!raw) return DEFAULT_PREFS;
-    return normalizePreferences({ ...DEFAULT_PREFS, ...JSON.parse(raw) });
-  } catch {
-    return DEFAULT_PREFS;
-  }
-}
-
-function normalizePreferences(preferences: Preferences): Preferences {
-  const theme = THEME_MODES.includes(preferences.theme) ? preferences.theme : 'system';
-  const lastThemeOverride = THEME_OVERRIDES.includes(preferences.lastThemeOverride)
-    ? preferences.lastThemeOverride
-    : theme === 'system'
-      ? DEFAULT_PREFS.lastThemeOverride
-      : theme;
-  const fontChoice = FONT_CHOICES.includes(preferences.fontChoice)
-    ? preferences.fontChoice
-    : 'sans';
-
-  return {
-    ...preferences,
-    theme,
-    lastThemeOverride,
-    fontChoice,
-    contentWidth: clamp(preferences.contentWidth, MIN_CONTENT_WIDTH, MAX_CONTENT_WIDTH),
-    filePanelWidth: clamp(preferences.filePanelWidth, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH),
-    tocPanelWidth: clamp(preferences.tocPanelWidth, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH)
-  };
 }
 
 function documentFromFolderDocument(entry: FolderDocument): DocumentState {
@@ -2009,142 +1417,6 @@ function documentFromFolderDocument(entry: FolderDocument): DocumentState {
     fileHandle: entry.fileHandle,
     canDirectSave: Boolean(entry.fileHandle),
     lastModified: entry.lastModified
-  });
-}
-
-function paintRenderedSearchHighlights(ranges: Range[], activeIndex: number): void {
-  const support = getCssHighlightSupport();
-  if (!support) return;
-
-  clearRenderedSearchHighlights();
-  if (ranges.length === 0) return;
-
-  support.registry.set(SEARCH_MATCH_HIGHLIGHT, new support.Highlight(...ranges));
-
-  const activeRange = ranges[activeIndex - 1];
-  if (activeRange) {
-    support.registry.set(SEARCH_ACTIVE_HIGHLIGHT, new support.Highlight(activeRange));
-  }
-}
-
-function clearRenderedSearchHighlights(): void {
-  const support = getCssHighlightSupport();
-  support?.registry.delete(SEARCH_MATCH_HIGHLIGHT);
-  support?.registry.delete(SEARCH_ACTIVE_HIGHLIGHT);
-}
-
-function getCssHighlightSupport():
-  { registry: HighlightRegistryLike; Highlight: HighlightConstructor } | undefined {
-  if (typeof CSS === 'undefined' || typeof window === 'undefined') return undefined;
-  const registry = (CSS as unknown as { highlights?: HighlightRegistryLike }).highlights;
-  const Highlight = (window as unknown as { Highlight?: HighlightConstructor }).Highlight;
-  if (!registry || !Highlight) return undefined;
-  return { registry, Highlight };
-}
-
-function selectEditorSearchMatch(
-  editorView: EditorView,
-  query: string,
-  options: SearchOptions,
-  cursor: number
-): void {
-  const match = collectTextMatches(editorView.state.doc.toString(), query, options)[cursor - 1];
-  if (!match) return;
-  editorView.focus();
-  editorView.dispatch({
-    selection: { anchor: match.from, head: match.to },
-    scrollIntoView: true
-  });
-}
-
-function findRenderedSearchRanges(
-  root: HTMLElement | null,
-  query: string,
-  options: SearchOptions
-): Range[] {
-  if (!root || !query.trim()) return [];
-  const ranges: Range[] = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const parent = node.parentElement;
-      if (!parent || parent.closest('button, style, script')) {
-        return NodeFilter.FILTER_REJECT;
-      }
-      return node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-    }
-  });
-
-  let node = walker.nextNode();
-  while (node) {
-    const text = node.textContent ?? '';
-    for (const match of collectTextMatches(text, query, options)) {
-      const range = document.createRange();
-      range.setStart(node, match.from);
-      range.setEnd(node, match.to);
-      ranges.push(range);
-    }
-    node = walker.nextNode();
-  }
-
-  return ranges;
-}
-
-function collectTextMatches(
-  text: string,
-  query: string,
-  options: SearchOptions
-): Array<{ from: number; to: number }> {
-  const regex = searchRegex(query, options);
-  if (!regex) return [];
-  const matches: Array<{ from: number; to: number }> = [];
-  for (const match of text.matchAll(regex)) {
-    const from = match.index ?? 0;
-    matches.push({ from, to: from + match[0].length });
-  }
-  return matches;
-}
-
-function searchRegex(query: string, options: SearchOptions): RegExp | null {
-  const trimmed = query.trim();
-  if (!trimmed) return null;
-  const flags = options.caseSensitive ? 'g' : 'gi';
-  const escaped = escapeRegExp(trimmed);
-  return new RegExp(options.wholeWord ? `\\b${escaped}\\b` : escaped, flags);
-}
-
-function scrollHeadingIntoView(
-  id: string,
-  reducedMotion: boolean,
-  preferredContainer?: HTMLElement | null
-): boolean {
-  const cleanId = id.replace(/^#/, '');
-  const target = document.getElementById(cleanId);
-  const container = preferredContainer ?? document.querySelector<HTMLElement>('.document-stage');
-  if (!target || !container) return false;
-
-  const targetRect = target.getBoundingClientRect();
-  const containerRect = container.getBoundingClientRect();
-  const top = targetRect.top - containerRect.top + container.scrollTop - 24;
-  container.scrollTo({
-    top: Math.max(0, top),
-    behavior: reducedMotion ? 'auto' : 'smooth'
-  });
-  window.history.replaceState(null, '', `#${cleanId}`);
-  return true;
-}
-
-function scrollRangeIntoStage(
-  range: Range,
-  container: HTMLElement | null,
-  reducedMotion: boolean
-): void {
-  if (!container) return;
-  const rect = range.getBoundingClientRect();
-  const containerRect = container.getBoundingClientRect();
-  const top = rect.top - containerRect.top + container.scrollTop - container.clientHeight * 0.35;
-  container.scrollTo({
-    top: Math.max(0, top),
-    behavior: reducedMotion ? 'auto' : 'smooth'
   });
 }
 
@@ -2158,27 +1430,6 @@ function errorMessage(error: unknown, fallback: string): string {
 
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
-}
-
-function getScrollRatio(element: HTMLElement): number {
-  const max = element.scrollHeight - element.clientHeight;
-  if (max <= 0) return 0;
-  return element.scrollTop / max;
-}
-
-function restoreScrollRatio(element: HTMLElement, ratio: number): void {
-  const max = Math.max(0, element.scrollHeight - element.clientHeight);
-  element.scrollTop = Math.max(0, Math.min(1, ratio)) * max;
-}
-
-function getReaderScrollElement(stage: HTMLElement | null): HTMLElement | null {
-  if (stage && stage.scrollHeight > stage.clientHeight) return stage;
-  return document.scrollingElement as HTMLElement | null;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.max(min, Math.min(max, value));
 }
 
 function isCompactLayout(): boolean {

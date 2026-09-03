@@ -1,0 +1,106 @@
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { memo, useEffect, useRef } from 'react';
+import { clamp } from '../lib/preferences';
+
+interface SidebarToggleProps {
+  side: 'left' | 'right';
+  visible: boolean;
+  onClick: () => void;
+  dirty?: boolean;
+}
+
+function SidebarIcon({ side, visible }: Pick<SidebarToggleProps, 'side' | 'visible'>) {
+  const Icon =
+    side === 'left'
+      ? visible
+        ? PanelLeftClose
+        : PanelLeftOpen
+      : visible
+        ? PanelRightClose
+        : PanelRightOpen;
+  return <Icon size={18} aria-hidden="true" />;
+}
+
+export function SidebarToggle({ side, visible, onClick, dirty }: SidebarToggleProps) {
+  const label = `${visible ? 'Hide' : 'Show'} ${side === 'left' ? 'file sidebar' : 'table of contents'}`;
+  return (
+    <button
+      className={`reading-control reading-control--sidebar tooltip-button ${dirty ? 'is-dirty' : ''}`}
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      aria-pressed={visible}
+      aria-controls={side === 'left' ? 'files-panel' : 'contents-panel'}
+      data-tooltip={label}
+    >
+      <SidebarIcon side={side} visible={visible} />
+      {dirty ? <span className="edge-toggle__dot" aria-hidden="true" /> : null}
+    </button>
+  );
+}
+
+/** Pointer tracking stays outside React rendering and updates at most once per frame. */
+export const EdgePanelToggle = memo(function EdgePanelToggle({
+  side,
+  visible,
+  onClick,
+  dirty = false,
+  panelWidth,
+  rightOffset = 0
+}: SidebarToggleProps & { panelWidth: number; rightOffset?: number }) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const button = buttonRef.current;
+    if (!button) return;
+    let frame = 0;
+    let pointer = { x: 0, y: 0 };
+    const hide = () => {
+      window.cancelAnimationFrame(frame);
+      frame = 0;
+      button.classList.remove('is-revealed');
+    };
+    const update = () => {
+      frame = 0;
+      const edge = side === 'left' ? 0 : window.innerWidth - rightOffset;
+      const boundary = edge + (visible ? panelWidth * (side === 'left' ? 1 : -1) : 0);
+      const nearSide = Math.abs(pointer.x - boundary) < 48 || Math.abs(pointer.x - edge) < 24;
+      if (!nearSide && !button.matches(':hover')) {
+        hide();
+        return;
+      }
+      const headerHeight =
+        document.querySelector('.app-header')?.getBoundingClientRect().height ?? 72;
+      button.style.top = `${clamp(pointer.y - 22, headerHeight + 8, window.innerHeight - 70)}px`;
+      button.classList.add('is-revealed');
+    };
+    const move = (event: PointerEvent) => {
+      if (event.pointerType !== 'mouse') return;
+      pointer = { x: event.clientX, y: event.clientY };
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
+    window.addEventListener('pointermove', move, { passive: true });
+    document.documentElement.addEventListener('pointerleave', hide);
+    window.addEventListener('blur', hide);
+    return () => {
+      hide();
+      window.removeEventListener('pointermove', move);
+      document.documentElement.removeEventListener('pointerleave', hide);
+      window.removeEventListener('blur', hide);
+    };
+  }, [side, visible, panelWidth, rightOffset]);
+  const label = `${visible ? 'Collapse' : 'Expand'} ${side === 'left' ? 'Files' : 'Contents'} panel`;
+  return (
+    <button
+      ref={buttonRef}
+      className={`edge-toggle tooltip-button edge-toggle--${side} ${visible ? 'is-open' : ''} ${dirty ? 'is-dirty' : ''}`}
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      aria-pressed={visible}
+      data-tooltip={label}
+    >
+      <SidebarIcon side={side} visible={visible} />
+      {dirty ? <span className="edge-toggle__dot" aria-hidden="true" /> : null}
+    </button>
+  );
+});

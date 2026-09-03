@@ -11,17 +11,25 @@ https://shekharroy.com/markdown-viewer/
 ## What You Can Do
 
 - Open a Markdown file from your computer.
-- Open a folder and move between Markdown files from the sidebar.
+- Open a folder and move through a collapsible Markdown file tree from the sidebar.
 - Paste Markdown or load a public Markdown URL.
 - Read GitHub-style Markdown with tables, task lists, footnotes, math, Mermaid diagrams, images, and highlighted code.
 - Search inside the document and jump through matches.
 - Make quick edits and save or download the updated file.
-- Change the theme, font, text size, line height, and reading width.
+- Switch between a previewable gallery of light and dark reading themes.
+- Use the header for a simple Paper/Slate light–dark toggle while system appearance remains the default.
+- Choose fonts visually and opt into a true full-width reading layout from the reorganized Settings panel.
+- Keep font-size, zoom, font-weight, and high-contrast controls within easy reach while reading.
+- Open either sidebar from the ends of the reading dock, or reveal its contextual edge control with the pointer.
+- Reset the reading dock without changing the selected theme, file, or draft.
+- Restore the open document, folder expansion, preferences, and per-file scroll position after a reload.
 - Keep recent files and recover unsaved drafts in the same browser.
 
 ## Privacy
 
 Markdown Viewer runs in your browser. Local files are not uploaded, and the app does not use accounts, analytics, tracking scripts, or a backend server.
+
+The current document and folder tree are stored in this browser so the workspace can be restored after a reload. This local workspace data can be removed with **Clear local data**.
 
 Some browser features, like reopening a recent local file or saving directly back to the original file, may ask for permission. If the browser does not support direct saving, the app falls back to downloading the updated Markdown file.
 
