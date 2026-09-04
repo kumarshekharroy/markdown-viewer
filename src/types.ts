@@ -73,6 +73,7 @@ export interface TocItem {
   id: string;
   level: number;
   text: string;
+  from: number;
 }
 
 export interface RecentDocument {

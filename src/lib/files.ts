@@ -40,6 +40,21 @@ export function documentFromContent(
   };
 }
 
+/**
+ * Removes virtual Untitled entries created by versions that placed a new,
+ * unsaved document inside the open folder tree. Real folder files always
+ * include either a file handle or their File.lastModified timestamp.
+ */
+export function isLegacyUnsavedFolderEntry(document: FolderDocument): boolean {
+  const filename = document.path.split('/').filter(Boolean).at(-1) ?? '';
+  return (
+    document.fileHandle === undefined &&
+    document.lastModified === undefined &&
+    document.content === '' &&
+    /^Untitled(?:-\d+)?\.md$/i.test(filename)
+  );
+}
+
 export function downloadText(
   filename: string,
   content: string,

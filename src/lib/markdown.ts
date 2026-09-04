@@ -43,14 +43,16 @@ export function slugify(value: string): string {
   return slug || 'section';
 }
 
-export function extractHeadings(markdown: string): TocItem[] {
-  const lines = markdown.split(/\r?\n/);
+export function extractHeadings(markdown: string, sourceOffset = 0): TocItem[] {
   const counts = new Map<string, number>();
   const headings: TocItem[] = [];
   let inFence = false;
   let fenceMarker = '';
+  const lines = markdown.matchAll(/([^\r\n]*)(?:\r\n|\n|$)/g);
 
-  for (const line of lines) {
+  for (const lineMatch of lines) {
+    if (!lineMatch[0]) break;
+    const line = lineMatch[1];
     const fence = line.match(/^(\s*)(`{3,}|~{3,})/);
     if (fence && !inFence) {
       inFence = true;
@@ -75,7 +77,8 @@ export function extractHeadings(markdown: string): TocItem[] {
     headings.push({
       id: seen === 0 ? base : `${base}-${seen + 1}`,
       level: match[1].length,
-      text
+      text,
+      from: sourceOffset + (lineMatch.index ?? 0)
     });
   }
 

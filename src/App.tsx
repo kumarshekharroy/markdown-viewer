@@ -19,6 +19,7 @@ import {
   clearRenderedSearchHighlights,
   findRenderedSearchRanges,
   selectEditorSearchMatch,
+  scrollEditorHeadingIntoView,
   scrollHeadingIntoView,
   scrollRangeIntoStage,
   getScrollRatio,
@@ -26,7 +27,18 @@ import {
   getReaderScrollElement
 } from './lib/readerNavigation';
 import type { EditorView } from '@codemirror/view';
-import { Check, Edit3, FolderOpen, Moon, Save, Sun, TriangleAlert, Upload, X } from 'lucide-react';
+import {
+  Check,
+  Edit3,
+  FilePlus2,
+  FolderOpen,
+  Moon,
+  Save,
+  Sun,
+  TriangleAlert,
+  Upload,
+  X
+} from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -48,6 +60,7 @@ import {
   filenameForMarkdown,
   folderFromDirectoryHandle,
   folderFromInputFiles,
+  isLegacyUnsavedFolderEntry,
   pickSaveAs,
   readMarkdownFile,
   saveToFileHandle,
@@ -163,7 +176,10 @@ export default function App() {
   const deferredContent = useDeferredValue(documentState.content);
   const contentToParse = isEditing ? deferredContent : documentState.content;
   const parsed = useMemo(() => parseFrontMatter(contentToParse), [contentToParse]);
-  const toc = useMemo(() => extractHeadings(parsed.body), [parsed.body]);
+  const toc = useMemo(
+    () => extractHeadings(parsed.body, parsed.raw?.length ?? 0),
+    [parsed.body, parsed.raw]
+  );
   const fileTree = useMemo(
     () => (folder ? buildFileTree(folder.documents, folder.name) : []),
     [folder]
@@ -192,11 +208,31 @@ export default function App() {
       .then(([session, recentDocuments]) => {
         if (!active) return;
         setRecent(recentDocuments);
-        if (session?.document.content.trim()) {
-          setDocumentState(session.document);
+        if (session?.document) {
+          const legacyEntries = session.folder?.documents.filter(isLegacyUnsavedFolderEntry) ?? [];
+          const detachedDocument = legacyEntries.some((entry) => entry.id === session.document.id);
+          setDocumentState(
+            detachedDocument
+              ? {
+                  ...session.document,
+                  path: undefined,
+                  fileHandle: undefined,
+                  canDirectSave: false,
+                  sourceLabel: filenameForMarkdown(session.document.title)
+                }
+              : session.document
+          );
           setDirty(session.dirty);
           setFolder(
-            session.folder ? { ...session.folder, assets: new Map<string, string>() } : null
+            session.folder
+              ? {
+                  ...session.folder,
+                  documents: session.folder.documents.filter(
+                    (entry) => !isLegacyUnsavedFolderEntry(entry)
+                  ),
+                  assets: new Map<string, string>()
+                }
+              : null
           );
           setExpandedFolders(
             new Set(loadFolderExpansion(session.folder?.name, session.expandedFolders))
@@ -266,6 +302,13 @@ export default function App() {
       setMobileTocOpen(false);
     }
   }, [compactLayout]);
+
+  useEffect(() => {
+    const activeFile = document.querySelector<HTMLElement>(
+      '#files-panel .file-tree button[aria-current="page"]'
+    );
+    activeFile?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [documentState.path, fileTree, mobileFilesOpen, preferences.filePanelVisible]);
 
   useEffect(() => {
     directoryInputRef.current?.setAttribute('webkitdirectory', '');
@@ -420,8 +463,11 @@ export default function App() {
   const applyDocument = useCallback((next: DocumentState, markDirty: boolean) => {
     setDocumentState(next);
     setDirty(markDirty);
-    setIsEditing(false);
     setSearchCursor(0);
+    setActiveHeading('');
+    if (window.location.hash) {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    }
     if (!markDirty) {
       deleteDraft(next.id).catch(() => undefined);
     }
@@ -442,6 +488,25 @@ export default function App() {
     },
     [refreshRecent]
   );
+
+  const createDocument = async () => {
+    if (!(await confirmReplace())) return;
+
+    const filename = nextUntitledFilename(folder);
+    applyDocument(
+      documentFromContent('', filename, filename, {
+        id: `new-${crypto.randomUUID()}`
+      }),
+      true
+    );
+    setIsEditing(true);
+    setMobileFilesOpen(false);
+    setMobileTocOpen(false);
+    announce(
+      'New Markdown file created outside the open folder. Save it, then reopen the folder to include it in the file tree.',
+      'success'
+    );
+  };
 
   const openFile = async () => {
     if (!(await confirmReplace())) return;
@@ -560,11 +625,21 @@ export default function App() {
   const scrollToHeading = useCallback(
     (id: string) => {
       const cleanId = id.replace(/^#/, '');
+      if (isEditing) {
+        const heading = toc.find((item) => item.id === cleanId);
+        if (!editorView || !heading) return;
+        scrollEditorHeadingIntoView(editorView, heading.from);
+        setActiveHeading(cleanId);
+        window.history.replaceState(null, '', `#${cleanId}`);
+        if (compactLayout) setMobileTocOpen(false);
+        return;
+      }
       if (scrollHeadingIntoView(cleanId, preferences.reducedMotion, scrollContainerRef.current)) {
         setActiveHeading(cleanId);
+        if (compactLayout) setMobileTocOpen(false);
       }
     },
-    [preferences.reducedMotion]
+    [compactLayout, editorView, isEditing, preferences.reducedMotion, toc]
   );
 
   useEffect(() => {
@@ -581,6 +656,7 @@ export default function App() {
     async (entry: FolderDocument, hash?: string) => {
       if (entry.id === documentState.id) {
         if (hash) scrollToHeading(hash);
+        if (compactLayout) setMobileFilesOpen(false);
         return;
       }
       if (!(await confirmReplace())) return;
@@ -591,11 +667,20 @@ export default function App() {
       const doc = documentFromFolderDocument(entry);
       applyDocument(doc, false);
       await rememberDocument(doc);
+      if (compactLayout) setMobileFilesOpen(false);
       if (hash) {
         window.setTimeout(() => scrollToHeading(hash), 120);
       }
     },
-    [documentState.id, confirmReplace, folder, applyDocument, rememberDocument, scrollToHeading]
+    [
+      documentState.id,
+      confirmReplace,
+      folder,
+      applyDocument,
+      rememberDocument,
+      scrollToHeading,
+      compactLayout
+    ]
   );
 
   const resolveAsset = useCallback(
@@ -1012,7 +1097,7 @@ export default function App() {
 
         <div className="header-actions">
           <button
-            className="control-button control-button--primary"
+            className="control-button control-button--primary header-open-button"
             type="button"
             onClick={openFile}
           >
@@ -1052,6 +1137,7 @@ export default function App() {
           <MoreMenu
             canDirectSave={documentState.canDirectSave}
             dirty={dirty}
+            onNew={createDocument}
             onSave={saveDocument}
             onSaveAs={saveAs}
             onOpenFolder={openFolder}
@@ -1132,78 +1218,93 @@ export default function App() {
               title="Files"
               onClose={() => setMobileFilesOpen(false)}
               actions={
-                <button
-                  className="panel-action tooltip-button"
-                  type="button"
-                  onClick={openFolder}
-                  aria-label="Open folder"
-                  data-tooltip="Open folder"
-                >
-                  <FolderOpen size={17} aria-hidden="true" />
-                  <span>Open</span>
-                </button>
+                <>
+                  <button
+                    className="panel-action tooltip-button"
+                    type="button"
+                    onClick={createDocument}
+                    aria-label="New Markdown file"
+                    data-tooltip="New Markdown file"
+                  >
+                    <FilePlus2 size={17} aria-hidden="true" />
+                    <span>New</span>
+                  </button>
+                  <button
+                    className="panel-action tooltip-button"
+                    type="button"
+                    onClick={openFolder}
+                    aria-label="Open folder"
+                    data-tooltip="Open folder"
+                  >
+                    <FolderOpen size={17} aria-hidden="true" />
+                    <span>Open</span>
+                  </button>
+                </>
               }
             />
-            {!window.showDirectoryPicker ? (
-              <div className="panel-section panel-section--compact">
-                <p className="browser-note">
-                  Folder access varies by browser. This browser uses a directory picker fallback
-                  when available.
-                </p>
-              </div>
-            ) : null}
-            {folder ? (
-              <div className="panel-section">
-                <h2>{folder.name}</h2>
-                <nav className="file-tree" aria-label="Folder Markdown files">
-                  <FileTree
-                    nodes={fileTree}
-                    expandedFolders={expandedFolders}
-                    activePath={documentState.path}
-                    dirty={dirty}
-                    onToggleFolder={toggleFolderExpanded}
-                    onOpenDocument={openFolderDocument}
-                  />
-                </nav>
-              </div>
-            ) : null}
-            <div className="panel-section recent-section">
-              <h2>Recent</h2>
-              {recent.length === 0 ? (
-                <p className="browser-note">
-                  Recent document metadata appears here. File contents are not stored in this list.
-                </p>
-              ) : (
-                <ul className="recent-list">
-                  {visibleRecent.map((item) => (
-                    <li
-                      key={item.id}
-                      className={[
-                        item.id === documentState.id ? 'is-active' : '',
-                        dirty && item.id === documentState.id ? 'is-dirty' : ''
-                      ]
-                        .filter(Boolean)
-                        .join(' ')}
-                    >
-                      <button type="button" onClick={() => reopenRecent(item)}>
-                        <strong>{item.title}</strong>
-                        <span>{item.sourceLabel}</span>
-                      </button>
-                      <button
-                        className="icon-button"
-                        type="button"
-                        onClick={async () => {
-                          await removeRecent(item.id);
-                          await refreshRecent();
-                        }}
-                        aria-label={`Remove ${item.title} from recent documents`}
+            <div className="file-panel__scroll">
+              {!window.showDirectoryPicker ? (
+                <div className="panel-section panel-section--compact">
+                  <p className="browser-note">
+                    Folder access varies by browser. This browser uses a directory picker fallback
+                    when available.
+                  </p>
+                </div>
+              ) : null}
+              {folder ? (
+                <div className="panel-section">
+                  <h2>{folder.name}</h2>
+                  <nav className="file-tree" aria-label="Folder Markdown files">
+                    <FileTree
+                      nodes={fileTree}
+                      expandedFolders={expandedFolders}
+                      activePath={documentState.path}
+                      dirty={dirty}
+                      onToggleFolder={toggleFolderExpanded}
+                      onOpenDocument={openFolderDocument}
+                    />
+                  </nav>
+                </div>
+              ) : null}
+              <div className="panel-section recent-section">
+                <h2>Recent</h2>
+                {recent.length === 0 ? (
+                  <p className="browser-note">
+                    Recent document metadata appears here. File contents are not stored in this
+                    list.
+                  </p>
+                ) : (
+                  <ul className="recent-list">
+                    {visibleRecent.map((item) => (
+                      <li
+                        key={item.id}
+                        className={[
+                          item.id === documentState.id ? 'is-active' : '',
+                          dirty && item.id === documentState.id ? 'is-dirty' : ''
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                       >
-                        <X size={15} aria-hidden="true" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+                        <button type="button" onClick={() => reopenRecent(item)}>
+                          <strong>{item.title}</strong>
+                          <span>{item.sourceLabel}</span>
+                        </button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          onClick={async () => {
+                            await removeRecent(item.id);
+                            await refreshRecent();
+                          }}
+                          aria-label={`Remove ${item.title} from recent documents`}
+                        >
+                          <X size={15} aria-hidden="true" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
             <PanelResizer
               side="files"
@@ -1418,6 +1519,21 @@ function documentFromFolderDocument(entry: FolderDocument): DocumentState {
     canDirectSave: Boolean(entry.fileHandle),
     lastModified: entry.lastModified
   });
+}
+
+function nextUntitledFilename(folder: FolderState | null): string {
+  const usedNames = new Set(
+    folder?.documents.map(
+      (document) => document.path.split('/').filter(Boolean).at(-1)?.toLowerCase() ?? ''
+    ) ?? []
+  );
+  let number = 1;
+  let candidate = 'Untitled.md';
+  while (usedNames.has(candidate.toLowerCase())) {
+    number += 1;
+    candidate = `Untitled-${number}.md`;
+  }
+  return candidate;
 }
 
 function looksLikeMarkdown(text: string): boolean {

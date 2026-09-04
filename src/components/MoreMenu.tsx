@@ -1,5 +1,6 @@
 import {
   Download,
+  FilePlus2,
   Files,
   FolderOpen,
   Info,
@@ -15,6 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 interface MoreMenuProps {
   canDirectSave: boolean;
   dirty: boolean;
+  onNew: () => void;
   onSave: () => void;
   onSaveAs: () => void;
   onOpenFolder: () => void;
@@ -33,6 +35,7 @@ interface MoreMenuProps {
 export function MoreMenu({
   canDirectSave,
   dirty,
+  onNew,
   onSave,
   onSaveAs,
   onOpenFolder,
@@ -87,6 +90,11 @@ export function MoreMenu({
       </button>
       {open ? (
         <div className="menu-popover">
+          <button type="button" onClick={() => run(onNew)}>
+            <FilePlus2 size={16} aria-hidden="true" />
+            New Markdown file
+          </button>
+          <hr />
           <button type="button" onClick={() => run(onSave)}>
             <Save size={16} aria-hidden="true" />
             {canDirectSave ? 'Save' : dirty ? 'Download updated file' : 'Download file'}

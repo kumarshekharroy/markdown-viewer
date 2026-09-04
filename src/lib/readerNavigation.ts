@@ -57,6 +57,15 @@ export function selectEditorSearchMatch(
   });
 }
 
+export function scrollEditorHeadingIntoView(editorView: EditorView, position: number): void {
+  const safePosition = Math.max(0, Math.min(position, editorView.state.doc.length));
+  editorView.focus();
+  editorView.dispatch({
+    selection: { anchor: safePosition },
+    scrollIntoView: true
+  });
+}
+
 export function findRenderedSearchRanges(
   root: HTMLElement | null,
   query: string,

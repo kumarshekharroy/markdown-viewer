@@ -158,6 +158,7 @@ export function MarkdownEditor({
         ref={ref}
         value={value}
         height="100%"
+        autoFocus
         theme={dark ? githubDark : githubLight}
         extensions={extensions}
         basicSetup={false}

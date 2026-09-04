@@ -11,11 +11,13 @@ https://shekharroy.com/markdown-viewer/
 ## What You Can Do
 
 - Open a Markdown file from your computer.
+- Create a blank Markdown file and start writing immediately in Edit mode. New documents stay outside an open folder tree until the saved folder is reopened.
 - Open a folder and move through a collapsible Markdown file tree from the sidebar.
 - Paste Markdown or load a public Markdown URL.
 - Read GitHub-style Markdown with tables, task lists, footnotes, math, Mermaid diagrams, images, and highlighted code.
 - Search inside the document and jump through matches.
 - Make quick edits and save or download the updated file.
+- Keep Edit mode active while moving between files, and use the table of contents to jump through either the reader or editor.
 - Switch between a previewable gallery of light and dark reading themes.
 - Use the header for a simple Paper/Slate light–dark toggle while system appearance remains the default.
 - Choose fonts visually and opt into a true full-width reading layout from the reorganized Settings panel.

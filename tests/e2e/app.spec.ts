@@ -17,6 +17,185 @@ test('loads the reader and toggles editing', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Markdown Viewer Example' })).toBeVisible();
 });
 
+test('contents navigation moves the editor to the selected heading', async ({ page }) => {
+  await page.goto(APP_PATH);
+  await page.getByRole('button', { name: 'Edit Markdown' }).click();
+  await expect(page.locator('.cm-editor')).toBeVisible();
+
+  if (isCompactProject(test.info())) {
+    await page.getByRole('button', { name: 'Show table of contents' }).click();
+  }
+  await page.locator('.toc-list').getByRole('link', { name: 'Mermaid' }).click();
+
+  await expect(page.locator('.cm-activeLine')).toContainText('## Mermaid');
+  await expect(page).toHaveURL(/#mermaid$/);
+  await expect(page.locator('.cm-editor')).toBeVisible();
+  if (isCompactProject(test.info())) {
+    await expect(page.locator('.toc-panel')).toHaveCount(0);
+  }
+});
+
+test('new Markdown files open as focused, empty editors', async ({ page }) => {
+  await page.goto(APP_PATH);
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.locator('.menu-popover').getByRole('button', { name: 'New Markdown file' }).click();
+
+  await expect(page.locator('.title-block strong')).toHaveText('Untitled');
+  await expect(page.locator('.title-block strong')).toHaveAttribute('title', 'Untitled.md');
+  await expect(page.locator('.cm-editor')).toBeVisible();
+  await expect(page.locator('.cm-content')).toHaveText('');
+  await expect(page.getByRole('button', { name: 'Done editing' })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.closest('.cm-editor') !== null))
+    .toBe(true);
+
+  await page.keyboard.insertText('# Fresh note');
+  await expect(page.locator('.cm-content')).toContainText('# Fresh note');
+});
+
+test('new documents stay outside an open folder until that folder is reopened', async ({
+  page
+}) => {
+  test.skip(isCompactProject(test.info()), 'desktop folder tree behavior covers the shared state');
+  await page.goto(APP_PATH);
+
+  await page.locator('input[type="file"][multiple]').evaluate((input) => {
+    const transfer = new DataTransfer();
+    const file = new File(['# Existing note'], 'notes.md', { type: 'text/markdown' });
+    Object.defineProperty(file, 'webkitRelativePath', {
+      configurable: true,
+      value: 'workspace/notes.md'
+    });
+    transfer.items.add(file);
+    (input as HTMLInputElement).files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+
+  const folderTree = page.getByRole('navigation', { name: 'Folder Markdown files' });
+  await expect(folderTree.getByRole('button', { name: 'notes', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'New Markdown file' }).click();
+
+  await expect(page.locator('.title-block strong')).toHaveText('Untitled');
+  await expect(folderTree.getByRole('button', { name: /Untitled/i })).toHaveCount(0);
+  await expect(folderTree.getByRole('button', { name: 'notes', exact: true })).toBeVisible();
+
+  await page.waitForTimeout(450);
+  await page.reload();
+  await expect(page.locator('.title-block strong')).toHaveText('Untitled');
+  await expect(folderTree.getByRole('button', { name: /Untitled/i })).toHaveCount(0);
+  await expect(folderTree.getByRole('button', { name: 'notes', exact: true })).toBeVisible();
+});
+
+test('file actions stay fixed while long folder contents scroll', async ({ page }) => {
+  await page.goto(APP_PATH);
+
+  await page.locator('input[type="file"][multiple]').evaluate((input) => {
+    const transfer = new DataTransfer();
+    for (let index = 1; index <= 45; index += 1) {
+      const name = `note-${String(index).padStart(2, '0')}.md`;
+      const file = new File([`# Note ${index}`], name, { type: 'text/markdown' });
+      Object.defineProperty(file, 'webkitRelativePath', {
+        configurable: true,
+        value: `workspace/${name}`
+      });
+      transfer.items.add(file);
+    }
+    (input as HTMLInputElement).files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+
+  const panel = page.locator('.file-panel');
+  const scrollArea = page.locator('.file-panel__scroll');
+  const newButton = panel.getByRole('button', { name: 'New Markdown file' });
+  const openButton = panel.getByRole('button', { name: 'Open folder' });
+  const headerTop = await panel
+    .locator('.panel-header')
+    .evaluate((header) => header.getBoundingClientRect().top);
+
+  await expect
+    .poll(() =>
+      scrollArea.evaluate((element) => element.scrollHeight - element.clientHeight)
+    )
+    .toBeGreaterThan(0);
+  await page.waitForTimeout(100);
+  await scrollArea.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+  await expect.poll(() => scrollArea.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(newButton).toBeVisible();
+  await expect(openButton).toBeVisible();
+  await expect.poll(() => panel.evaluate((element) => element.scrollTop)).toBe(0);
+  await expect
+    .poll(() =>
+      panel.locator('.panel-header').evaluate((header) => header.getBoundingClientRect().top)
+    )
+    .toBe(headerTop);
+});
+
+test('switching folder files preserves Edit mode', async ({ page }) => {
+  test.skip(
+    isCompactProject(test.info()),
+    'desktop folder switching covers the shared mode behavior'
+  );
+  await page.goto(APP_PATH);
+
+  await page.locator('input[type="file"][multiple]').evaluate((input) => {
+    const transfer = new DataTransfer();
+    for (const [name, content] of [
+      ['alpha.md', '# Alpha\n\nFirst document.'],
+      ['beta.md', '# Beta\n\nSecond document.']
+    ]) {
+      const file = new File([content], name, { type: 'text/markdown' });
+      Object.defineProperty(file, 'webkitRelativePath', {
+        configurable: true,
+        value: `workspace/${name}`
+      });
+      transfer.items.add(file);
+    }
+    (input as HTMLInputElement).files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+
+  await expect(page.getByRole('heading', { name: 'Alpha' })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit Markdown' }).click();
+  await page
+    .getByRole('navigation', { name: 'Folder Markdown files' })
+    .getByRole('button', { name: 'beta', exact: true })
+    .click();
+
+  await expect(page.locator('.cm-editor')).toBeVisible();
+  await expect(page.locator('.cm-content')).toContainText('# Beta');
+  await expect(page.getByRole('button', { name: 'Done editing' })).toBeVisible();
+});
+
+test('compact header keeps branding, filename, and upload control aligned', async ({ page }) => {
+  test.skip(
+    !isCompactProject(test.info()),
+    'compact header styling is covered on tablet and mobile'
+  );
+  await page.goto(APP_PATH);
+
+  await expect(page.locator('.brand-icon')).toBeVisible();
+  await expect(page.locator('.app-name')).toHaveText('Markdown Viewer');
+  await expect(page.locator('.title-block strong')).toHaveText('Markdown Viewer Example');
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width <= 520) {
+    await expect
+      .poll(() =>
+        page.locator('.header-open-button').evaluate((button) => {
+          const buttonBox = button.getBoundingClientRect();
+          const iconBox = button.querySelector('svg')?.getBoundingClientRect();
+          if (!iconBox) return Number.POSITIVE_INFINITY;
+          const buttonCenter = buttonBox.left + buttonBox.width / 2;
+          const iconCenter = iconBox.left + iconBox.width / 2;
+          return Math.abs(buttonCenter - iconCenter);
+        })
+      )
+      .toBeLessThan(1);
+  }
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
+    .toBe(true);
+});
+
 test('persists sidebar and contents visibility preferences', async ({ page }) => {
   test.skip(
     isCompactProject(test.info()),

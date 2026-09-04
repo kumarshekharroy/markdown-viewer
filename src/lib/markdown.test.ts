@@ -13,9 +13,15 @@ describe('markdown helpers', () => {
     const headings = extractHeadings('# Intro\n\n```md\n# Ignored\n```\n\n## Intro\n## Intro');
 
     expect(headings).toEqual([
-      { id: 'intro', level: 1, text: 'Intro' },
-      { id: 'intro-2', level: 2, text: 'Intro' },
-      { id: 'intro-3', level: 2, text: 'Intro' }
+      { id: 'intro', level: 1, text: 'Intro', from: 0 },
+      { id: 'intro-2', level: 2, text: 'Intro', from: 30 },
+      { id: 'intro-3', level: 2, text: 'Intro', from: 39 }
+    ]);
+  });
+
+  it('tracks heading offsets through front matter and Windows line endings', () => {
+    expect(extractHeadings('# One\r\n\r\n## Two', 12).map((heading) => heading.from)).toEqual([
+      12, 21
     ]);
   });
 
