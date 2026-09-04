@@ -1,75 +1,50 @@
 # Markdown Viewer
 
-Markdown Viewer is a private, browser-based reader and lightweight editor for local Markdown documents. Open notes, documentation, READMEs, and project folders in a focused reading environment without uploading your files.
+Markdown Viewer is a small, private Markdown reader that runs in the browser. It is useful for reading notes, READMEs, and documentation without opening a full code editor or uploading files to a service.
 
-[Open Markdown Viewer](https://shekharroy.com/markdown-viewer/)
+Try it here: [shekharroy.com/markdown-viewer](https://shekharroy.com/markdown-viewer/)
 
-## Features
+## What it does
 
-### Open and organize documents
+- Opens individual Markdown files or an entire local folder
+- Renders tables, task lists, footnotes, math, Mermaid diagrams, images, and highlighted code
+- Includes a table of contents and document search
+- Lets you make quick edits and save them back to the original file when the browser allows it
+- Remembers your open document, reading position, theme, and unsaved drafts
+- Works offline after the first visit
 
-- Open individual `.md`, `.markdown`, `.mdown`, and `.txt` files.
-- Browse supported documents in a local folder using a collapsible file tree.
-- Create new Markdown documents or paste Markdown directly from the clipboard.
-- Load public Markdown files from HTTPS URLs when the source permits cross-origin access.
-- Reopen recent files and restore the previous workspace, folder state, and reading position.
+You can also paste Markdown, start a new document, or open a public Markdown file from a URL.
 
-### Read comfortably
+## Opening files from the desktop
 
-- Render GitHub Flavored Markdown, tables, task lists, footnotes, images, mathematical notation, Mermaid diagrams, and syntax-highlighted code.
-- Navigate long documents with a generated table of contents and in-document search.
-- Choose from light and dark themes, multiple font styles, adjustable text size and weight, zoom controls, high contrast, and full-width layouts.
-- Use responsive file and contents panels across desktop, tablet, and mobile screen sizes.
+The site can be installed as a desktop app from Chrome or Edge. After installation, allow file handling and choose Markdown Viewer as the default app for `.md`, `.markdown`, `.mdown`, or `.txt` files. Double-clicking one of those files will then open it in Markdown Viewer.
 
-### Make quick edits
+If you installed the app before file handling was added, update or reinstall it so the operating system can pick up the new file associations.
 
-- Switch between reading and editing without losing your position.
-- Save changes directly to the original file when the browser grants write access.
-- Download an updated copy when direct file access is unavailable.
-- Recover unsaved drafts stored in the same browser.
+Desktop file associations currently require a Chromium-based browser. In other browsers, files can still be opened with the **Open** button or by dragging them into the app.
 
-### Use it as a desktop app
+## Privacy
 
-Markdown Viewer can be installed as an offline-capable Progressive Web App (PWA). On supported desktop browsers, installed copies can open Markdown files directly from the operating system.
+Local files stay on your device. There is no account, analytics, tracking, or application server receiving your documents.
 
-To enable desktop file opening:
+The app does keep some information in browser storage so it can restore your workspace. This includes the current document, recent files, drafts, preferences, folder state, and reading positions. You can remove it at any time with **Clear local data**.
 
-1. Open Markdown Viewer in Google Chrome or Microsoft Edge on a desktop computer.
-2. Install the app using the browser's install option.
-3. Allow file handling if the browser requests permission.
-4. Select Markdown Viewer as the default application for the desired Markdown file types in your operating system settings.
+Opening a public URL is different: the browser fetches that URL directly, and the server must allow cross-origin requests.
 
-If an existing installation does not recognize the new file associations, close and reopen the app, check for an update in the browser's app settings, or reinstall it.
+## A few limits
 
-> Desktop file associations require the PWA File Handling API, which is currently available in Chromium-based desktop browsers. Other browsers can still open files through the app's **Open** command or drag and drop.
-
-## Privacy and local data
-
-Local documents are processed on your device and are not uploaded to an application server. Markdown Viewer does not require an account and does not include analytics or tracking scripts.
-
-To restore your workspace between sessions, the app stores the current document, recent-file information, drafts, preferences, folder state, and reading positions in your browser. Use **Clear local data** from the app menu to remove this information.
-
-Your browser controls access to local files. It may request permission before reopening a file or saving changes to the original. When write access is unavailable, Markdown Viewer creates a downloadable copy instead.
-
-## Supported files and limitations
-
-- Local documents must be UTF-8 encoded and no larger than 8 MB.
-- Public URLs must use HTTPS, return readable text, and permit browser access through CORS.
-- Direct saving, directory access, and desktop file associations depend on browser support and user-granted permissions.
-- The app must be loaded online once before its offline resources are available.
+- Supported extensions are `.md`, `.markdown`, `.mdown`, and `.txt`.
+- Files must be UTF-8 text and no larger than 8 MB.
+- Saving in place, opening folders, and desktop file handling depend on browser support and permission settings. If direct saving is unavailable, the app downloads an updated copy instead.
 
 ## Development
-
-### Run locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite.
-
-### Run quality checks
+Before publishing a change:
 
 ```bash
 npm run lint
@@ -78,18 +53,16 @@ npm run build
 npm run test:e2e
 ```
 
-If Playwright browsers are not installed, run:
+Install the Playwright browsers first if needed:
 
 ```bash
 npx playwright install
 ```
 
-### Build and publish
-
-The production build is configured for `https://shekharroy.com/markdown-viewer/`.
+The production build uses `/markdown-viewer/` as its base path:
 
 ```bash
 npm run build
 ```
 
-Publish the generated `dist/` directory with GitHub Pages, or use the included GitHub Actions workflow in `.github/workflows/pages.yml`.
+Publish `dist/` to GitHub Pages, or use the workflow in `.github/workflows/pages.yml`.
