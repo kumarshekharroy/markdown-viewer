@@ -6,6 +6,26 @@
   "start_url": "/markdown-viewer/",
   "scope": "/markdown-viewer/",
   "display": "standalone",
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
+  "file_handlers": [
+    {
+      "action": "/markdown-viewer/",
+      "accept": {
+        "text/markdown": [".md", ".markdown", ".mdown"],
+        "text/plain": [".txt"]
+      },
+      "icons": [
+        {
+          "src": "/markdown-viewer/icon.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ],
+      "launch_type": "single-client"
+    }
+  ],
   "background_color": "#f7f5ef",
   "theme_color": "#f7f5ef",
   "icons": [

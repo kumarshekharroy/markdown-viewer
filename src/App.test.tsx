@@ -1,11 +1,12 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { clearApplicationData } from './lib/storage';
 
 describe('App', () => {
   beforeEach(async () => {
+    Reflect.deleteProperty(window, 'launchQueue');
     localStorage.clear();
     await clearApplicationData();
   });
@@ -56,5 +57,40 @@ describe('App', () => {
         }
       );
     });
+  });
+
+  it('opens a Markdown file passed to the installed PWA by the operating system', async () => {
+    let nativeConsumer: ((params: LaunchParams) => void) | undefined;
+    Object.defineProperty(window, 'launchQueue', {
+      configurable: true,
+      value: {
+        setConsumer(nextConsumer: (params: LaunchParams) => void) {
+          nativeConsumer = nextConsumer;
+        }
+      }
+    });
+    const bytes = new TextEncoder().encode('# Opened from desktop');
+    const file = {
+      name: 'double-click.md',
+      size: bytes.byteLength,
+      lastModified: 123,
+      arrayBuffer: vi.fn().mockResolvedValue(bytes.buffer)
+    } as unknown as File;
+    const handle = {
+      kind: 'file',
+      name: file.name,
+      queryPermission: vi.fn().mockResolvedValue('granted'),
+      requestPermission: vi.fn().mockResolvedValue('granted'),
+      getFile: vi.fn().mockResolvedValue(file)
+    } as unknown as FileSystemFileHandle;
+
+    render(<App />);
+
+    await waitFor(() => expect(nativeConsumer).toBeDefined());
+    nativeConsumer?.({ files: [handle] });
+
+    expect(await screen.findByRole('heading', { name: 'Opened from desktop' })).toBeInTheDocument();
+    expect(handle.getFile).toHaveBeenCalledOnce();
+    expect(handle.queryPermission).toHaveBeenCalledWith({ mode: 'read' });
   });
 });

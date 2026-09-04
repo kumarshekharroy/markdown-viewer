@@ -52,7 +52,17 @@ interface SaveFilePickerOptions {
   }>;
 }
 
+interface LaunchParams {
+  readonly files: readonly FileSystemHandle[];
+  readonly targetURL?: string;
+}
+
+interface LaunchQueue {
+  setConsumer(consumer: (launchParams: LaunchParams) => void): void;
+}
+
 interface Window {
+  launchQueue?: LaunchQueue;
   showOpenFilePicker?: (options?: OpenFilePickerOptions) => Promise<FileSystemFileHandle[]>;
   showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandle>;
   showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;

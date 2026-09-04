@@ -67,6 +67,7 @@ import {
   verifyPermission
 } from './lib/files';
 import { parseFrontMatter } from './lib/frontmatter';
+import { subscribeToFileLaunches } from './lib/fileLaunch';
 import {
   convertGitHubBlobUrl,
   countMatches,
@@ -488,6 +489,42 @@ export default function App() {
     },
     [refreshRecent]
   );
+
+  useEffect(() => {
+    if (!workspaceReady) return undefined;
+
+    return subscribeToFileLaunches(async (handles) => {
+      const handle = handles[0];
+      if (!handle || !(await confirmReplace())) return;
+
+      try {
+        const allowed = await verifyPermission(handle, 'read');
+        if (!allowed) {
+          throw new Error('Permission to read the opened file was not granted.');
+        }
+
+        const file = await handle.getFile();
+        const content = await readMarkdownFile(file);
+        const doc = documentFromContent(content, displayNameFromPath(file.name), file.name, {
+          fileHandle: handle,
+          canDirectSave: true,
+          lastModified: file.lastModified,
+          path: file.name
+        });
+
+        applyDocument(doc, false);
+        await rememberDocument(doc);
+        announce(
+          handles.length === 1
+            ? 'File opened by the installed app. Direct save is available.'
+            : `Opened ${file.name}. Open additional selected files one at a time.`,
+          'success'
+        );
+      } catch (error) {
+        announce(errorMessage(error, 'The file passed to the app could not be opened.'), 'error');
+      }
+    });
+  }, [announce, applyDocument, confirmReplace, rememberDocument, workspaceReady]);
 
   const createDocument = async () => {
     if (!(await confirmReplace())) return;
