@@ -53,6 +53,163 @@ test('new Markdown files open as focused, empty editors', async ({ page }) => {
   await expect(page.locator('.cm-content')).toContainText('# Fresh note');
 });
 
+test('tabs preserve separate unsaved drafts through switching and reload', async ({ page }) => {
+  await page.goto(APP_PATH);
+  await page.getByRole('button', { name: 'New Markdown tab' }).click();
+  await expect(page.locator('.cm-content')).toBeVisible();
+  await page.keyboard.insertText('# First draft');
+  await expect(page.getByRole('tab').nth(1)).toContainText('●');
+
+  await page.getByRole('button', { name: 'New Markdown tab' }).click();
+  await expect(page.locator('.cm-content')).toBeVisible();
+  await page.keyboard.insertText('# Second draft');
+  await expect(page.getByRole('tab').nth(2)).toContainText('●');
+
+  await page.getByRole('tab').nth(1).click();
+  await expect(page.locator('.cm-content')).toContainText('# First draft');
+  await page.getByRole('tab').nth(2).click();
+  await expect(page.locator('.cm-content')).toContainText('# Second draft');
+
+  await page.waitForTimeout(900);
+  await page.reload();
+  await expect(page.getByRole('tab')).toHaveCount(3);
+  await expect(page.getByRole('heading', { name: 'Second draft' })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit Markdown' }).click();
+  await expect(page.locator('.cm-content')).toContainText('# Second draft');
+  await page.getByRole('tab').nth(1).click();
+  await expect(page.locator('.cm-content')).toContainText('# First draft');
+});
+
+test('closing one dirty tab requires confirmation without affecting another', async ({ page }) => {
+  await page.goto(APP_PATH);
+  await page.getByRole('button', { name: 'New Markdown tab' }).click();
+  await expect(page.locator('.cm-content')).toBeVisible();
+  await page.keyboard.insertText('# Keep this');
+  await page.getByRole('button', { name: 'New Markdown tab' }).click();
+  await expect(page.locator('.cm-content')).toBeVisible();
+  await page.keyboard.insertText('# Also keep this');
+
+  page.once('dialog', async (dialog) => dialog.dismiss());
+  await page.getByRole('button', { name: 'Close Untitled.md' }).click();
+  await expect(page.getByRole('tab')).toHaveCount(3);
+
+  page.once('dialog', async (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Close Untitled.md' }).click();
+  await expect(page.getByRole('tab')).toHaveCount(2);
+  await expect(page.locator('.cm-content')).toContainText('# Also keep this');
+  await expect(page.getByRole('tab').last()).toContainText('●');
+});
+
+test('split view keeps a live preview and resizes with the keyboard', async ({ page }) => {
+  await page.goto(APP_PATH);
+  await page.getByRole('button', { name: 'Edit Markdown' }).click();
+  await page.getByRole('button', { name: 'Show live preview beside editor' }).click();
+
+  await expect(page.getByRole('region', { name: 'Live preview' })).toBeVisible();
+  await expect(page.locator('.cm-editor')).toBeVisible();
+  const divider = page.getByRole('separator', { name: 'Resize editor and preview' });
+  await expect(divider).toHaveAttribute('aria-valuenow', '50');
+  await divider.focus();
+  await divider.press(isCompactProject(test.info()) ? 'ArrowDown' : 'ArrowRight');
+  await expect(divider).toHaveAttribute('aria-valuenow', '55');
+
+  await page.locator('.cm-content').click();
+  await page.keyboard.press('ControlOrMeta+End');
+  await page.keyboard.insertText('\n## Live heading');
+  await expect(
+    page
+      .getByRole('region', { name: 'Live preview' })
+      .getByRole('heading', { name: 'Live heading' })
+  ).toBeVisible();
+
+  await page.locator('.split-preview-pane').evaluate((pane) => {
+    pane.scrollTop = 0;
+  });
+  await page.locator('.cm-scroller').evaluate((scroller) => {
+    scroller.scrollTop = scroller.scrollHeight;
+    scroller.dispatchEvent(new Event('scroll'));
+  });
+  await expect
+    .poll(() => page.locator('.split-preview-pane').evaluate((pane) => pane.scrollTop))
+    .toBeGreaterThan(0);
+});
+
+test('split scrolling aligns the same section in source and preview', async ({ page }) => {
+  test.skip(isCompactProject(test.info()), 'desktop section alignment covers the horizontal split');
+  await page.goto(APP_PATH);
+  await page.getByRole('button', { name: 'Edit Markdown' }).click();
+  await page.getByRole('button', { name: 'Show live preview beside editor' }).click();
+  await page.locator('.toc-list').getByRole('link', { name: 'Code', exact: true }).click();
+  const codeLine = page.locator('.cm-line').filter({ hasText: '## Code' }).first();
+  await expect(codeLine).toBeVisible();
+  await codeLine.evaluate((line) => {
+    const scroller = line.closest('.cm-scroller') as HTMLElement;
+    scroller.scrollTop +=
+      line.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 150;
+    scroller.dispatchEvent(new Event('scroll'));
+  });
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const line = Array.from(document.querySelectorAll<HTMLElement>('.cm-line')).find((item) =>
+          item.textContent?.includes('## Code')
+        );
+        const scroller = document.querySelector<HTMLElement>('.cm-scroller');
+        const preview = document.querySelector<HTMLElement>('.split-preview-pane');
+        const heading = preview?.querySelector<HTMLElement>('#code');
+        const toolbar = document.querySelector<HTMLElement>('.format-toolbar');
+        if (!line || !scroller || !preview || !heading || !toolbar) return Infinity;
+        const editorY = line.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+        const previewY = heading.getBoundingClientRect().top - preview.getBoundingClientRect().top;
+        return Math.abs(previewY - editorY - toolbar.clientHeight);
+      })
+    )
+    .toBeLessThan(32);
+});
+
+test('opening two folders with the same file path keeps their tabs distinct', async ({ page }) => {
+  test.skip(isCompactProject(test.info()), 'desktop folder behavior covers tab identity');
+  await page.goto(APP_PATH);
+  const input = page.locator('input[type="file"][multiple]');
+  for (const title of ['First folder', 'Second folder']) {
+    await input.evaluate((element, heading) => {
+      const transfer = new DataTransfer();
+      const file = new File([`# ${heading}`], 'note.md', { type: 'text/markdown' });
+      Object.defineProperty(file, 'webkitRelativePath', {
+        configurable: true,
+        value: 'workspace/note.md'
+      });
+      transfer.items.add(file);
+      (element as HTMLInputElement).files = transfer.files;
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    }, title);
+    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+  }
+  await expect(page.getByRole('tab')).toHaveCount(3);
+  await page.getByRole('tab').nth(1).click();
+  await expect(page.getByRole('heading', { name: 'First folder' })).toBeVisible();
+  await page.getByRole('tab').nth(2).click();
+  await expect(page.getByRole('heading', { name: 'Second folder' })).toBeVisible();
+});
+
+test('one search and replace panel works in preview and editor', async ({ page }) => {
+  test.skip(isCompactProject(test.info()), 'desktop search panel covers the shared controls');
+  await page.goto(APP_PATH);
+  await page.getByRole('button', { name: 'Find in document' }).click();
+  await page.getByPlaceholder('Search this document').fill('Markdown');
+  await page.getByRole('button', { name: 'Replace', exact: true }).click();
+  await page.getByPlaceholder('Replace with').fill('MD');
+  await page.getByRole('button', { name: 'Replace all' }).click();
+  await expect(page.getByRole('heading', { name: 'MD Viewer Example' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Edit Markdown' }).click();
+  await page.getByRole('button', { name: 'Search and replace' }).click();
+  await page.getByPlaceholder('Search this document').fill('MD');
+  await page.getByPlaceholder('Replace with').fill('Markdown');
+  await page.getByRole('button', { name: 'Replace all' }).click();
+  await expect(page.locator('.cm-content')).toContainText('Markdown Viewer Example');
+});
+
 test('new documents stay outside an open folder until that folder is reopened', async ({
   page
 }) => {
@@ -113,9 +270,7 @@ test('file actions stay fixed while long folder contents scroll', async ({ page 
     .evaluate((header) => header.getBoundingClientRect().top);
 
   await expect
-    .poll(() =>
-      scrollArea.evaluate((element) => element.scrollHeight - element.clientHeight)
-    )
+    .poll(() => scrollArea.evaluate((element) => element.scrollHeight - element.clientHeight))
     .toBeGreaterThan(0);
   await page.waitForTimeout(100);
   await scrollArea.evaluate((element) => element.scrollTo(0, element.scrollHeight));
@@ -190,6 +345,23 @@ test('compact header keeps branding, filename, and upload control aligned', asyn
         })
       )
       .toBeLessThan(1);
+
+    await page.getByRole('button', { name: 'Edit Markdown' }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const title = document.querySelector('.header-title-area')?.getBoundingClientRect();
+          const actions = document.querySelector('.header-actions')?.getBoundingClientRect();
+          return title && actions ? actions.top - title.bottom : -1;
+        })
+      )
+      .toBeGreaterThan(0);
+    await page.getByRole('button', { name: 'Show live preview beside editor' }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
+      )
+      .toBe(true);
   }
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
@@ -369,7 +541,21 @@ test('edge controls appear near the pointer without disturbing the document', as
   await expect(edge).toHaveCSS('opacity', '1');
   const bounds = await edge.boundingBox();
   expect(bounds).not.toBeNull();
-  expect(Math.abs((bounds?.y ?? 0) + 22 - 440)).toBeLessThan(2);
+  expect(Math.abs((bounds?.y ?? 0) + (bounds?.height ?? 0) / 2 - 440)).toBeLessThan(2);
+  const workspaceTop = await page
+    .locator('.workspace')
+    .evaluate((workspace) => workspace.getBoundingClientRect().top);
+  await page.mouse.move(285, workspaceTop + 2);
+  await expect
+    .poll(async () => (await edge.boundingBox())?.y ?? 0)
+    .toBeGreaterThanOrEqual(workspaceTop + 23);
+  await page.mouse.move(285, page.viewportSize()!.height - 2);
+  await expect
+    .poll(async () => {
+      const box = await edge.boundingBox();
+      return box ? page.viewportSize()!.height - box.y - box.height : 0;
+    })
+    .toBeGreaterThanOrEqual(31);
   await edge.click();
   await expect(page.locator('.file-panel')).toHaveCount(0);
   await page.mouse.move(3, 540);

@@ -25,7 +25,8 @@ let memoryWorkspace: WorkspaceSession | undefined;
 const PREFERENCE_KEYS = [
   'markdown-viewer-preferences',
   'quietmark-preferences',
-  'markdown-viewer-tree-state'
+  'markdown-viewer-tree-state',
+  'markdown-viewer-split-ratio'
 ];
 const SCROLL_POSITIONS_KEY = 'markdown-viewer-scroll-positions';
 
@@ -67,14 +68,16 @@ export async function deleteDraft(id: string): Promise<void> {
 }
 
 export async function latestDraft(): Promise<DraftRecord | undefined> {
+  return (await getDrafts())[0];
+}
+
+export async function getDrafts(): Promise<DraftRecord[]> {
   if (!hasIndexedDb()) {
-    return Array.from(memoryDrafts.values())
-      .sort((a, b) => a.updatedAt - b.updatedAt)
-      .at(-1);
+    return Array.from(memoryDrafts.values()).sort((a, b) => b.updatedAt - a.updatedAt);
   }
   const db = await getDb();
   const drafts = await db.getAllFromIndex('drafts', 'by-updated');
-  return drafts.at(-1);
+  return drafts.reverse();
 }
 
 export async function upsertRecent(record: RecentDocument): Promise<void> {
@@ -165,6 +168,10 @@ function withoutFileHandles(session: WorkspaceSession): WorkspaceSession {
       fileHandle: undefined,
       canDirectSave: false
     },
+    tabs: session.tabs?.map((tab) => ({
+      ...tab,
+      document: { ...tab.document, fileHandle: undefined, canDirectSave: false }
+    })),
     folder: session.folder
       ? {
           ...session.folder,

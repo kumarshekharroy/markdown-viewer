@@ -68,9 +68,16 @@ export const EdgePanelToggle = memo(function EdgePanelToggle({
         hide();
         return;
       }
-      const headerHeight =
-        document.querySelector('.app-header')?.getBoundingClientRect().height ?? 72;
-      button.style.top = `${clamp(pointer.y - 22, headerHeight + 8, window.innerHeight - 70)}px`;
+      const workspaceTop = document.querySelector('.workspace')?.getBoundingClientRect().top ?? 116;
+      const visualBottom = window.visualViewport
+        ? window.visualViewport.offsetTop + window.visualViewport.height
+        : window.innerHeight;
+      const minimum = workspaceTop + 24;
+      const maximum = Math.max(minimum, visualBottom - button.offsetHeight - 32);
+      button.style.setProperty(
+        '--edge-follow-top',
+        `${clamp(pointer.y - button.offsetHeight / 2, minimum, maximum)}px`
+      );
       button.classList.add('is-revealed');
     };
     const move = (event: PointerEvent) => {

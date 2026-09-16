@@ -8,9 +8,10 @@ Try it here: [shekharroy.com/markdown-viewer](https://shekharroy.com/markdown-vi
 
 - Opens individual Markdown files or an entire local folder
 - Renders tables, task lists, footnotes, math, Mermaid diagrams, images, and highlighted code
-- Includes a table of contents and document search
+- Includes a table of contents and shared Markdown search and replace in the reader and editor
 - Lets you make quick edits and save them back to the original file when the browser allows it
-- Remembers your open document, reading position, theme, and unsaved drafts
+- Offers resizable side-by-side editing and live preview with synchronized scrolling
+- Remembers open tabs, each tab's unsaved changes and draft, reading position, and theme
 - Works offline after the first visit
 
 You can also paste Markdown, start a new document, or open a public Markdown file from a URL.
@@ -27,7 +28,7 @@ Desktop file associations currently require a Chromium-based browser. In other b
 
 Local files stay on your device. There is no account, analytics, tracking, or application server receiving your documents.
 
-The app does keep some information in browser storage so it can restore your workspace. This includes the current document, recent files, drafts, preferences, folder state, and reading positions. You can remove it at any time with **Clear local data**.
+The app does keep some information in browser storage so it can restore your workspace. This includes open tabs, recent files, drafts, preferences, folder state, and reading positions. You can remove it at any time with **Clear local data**.
 
 Opening a public URL is different: the browser fetches that URL directly, and the server must allow cross-origin requests.
 

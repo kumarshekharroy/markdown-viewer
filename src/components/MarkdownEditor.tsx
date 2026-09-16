@@ -10,7 +10,7 @@ import {
   undo
 } from '@codemirror/commands';
 import { bracketMatching, indentOnInput } from '@codemirror/language';
-import { search, searchKeymap, openSearchPanel } from '@codemirror/search';
+import { search, SearchQuery, setSearchQuery } from '@codemirror/search';
 import { EditorSelection, type Extension } from '@codemirror/state';
 import {
   drawSelection,
@@ -36,7 +36,8 @@ import {
   Table2,
   Undo2
 } from 'lucide-react';
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import type { SearchOptions } from '../types';
 
 interface MarkdownEditorProps {
   value: string;
@@ -44,6 +45,10 @@ interface MarkdownEditorProps {
   dark: boolean;
   lineWrap: boolean;
   onEditorReady: (view: EditorView | null) => void;
+  onOpenSearch: () => void;
+  searchOpen: boolean;
+  searchQuery: string;
+  searchOptions: SearchOptions;
 }
 
 export function MarkdownEditor({
@@ -51,7 +56,11 @@ export function MarkdownEditor({
   onChange,
   dark,
   lineWrap,
-  onEditorReady
+  onEditorReady,
+  onOpenSearch,
+  searchOpen,
+  searchQuery,
+  searchOptions
 }: MarkdownEditorProps) {
   const ref = useRef<ReactCodeMirrorRef>(null);
   const extensions = useMemo<Extension[]>(
@@ -66,11 +75,25 @@ export function MarkdownEditor({
       highlightActiveLine(),
       markdown(),
       search({ top: true }),
-      keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
+      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       lineWrap ? EditorView.lineWrapping : []
     ],
     [lineWrap]
   );
+
+  useEffect(() => {
+    const view = ref.current?.view;
+    if (!view) return;
+    view.dispatch({
+      effects: setSearchQuery.of(
+        new SearchQuery({
+          search: searchOpen ? searchQuery.trim() : '',
+          caseSensitive: searchOptions.caseSensitive,
+          wholeWord: searchOptions.wholeWord
+        })
+      )
+    });
+  }, [searchOpen, searchQuery, searchOptions]);
 
   const withView = (callback: (view: EditorView) => void) => {
     const view = ref.current?.view;
@@ -150,7 +173,7 @@ export function MarkdownEditor({
         <ToolbarButton label="Redo" onClick={() => withView((view) => redo(view))}>
           <Redo2 size={17} aria-hidden="true" />
         </ToolbarButton>
-        <ToolbarButton label="Search and replace" onClick={() => withView(openSearchPanel)}>
+        <ToolbarButton label="Search and replace" onClick={onOpenSearch}>
           <Search size={17} aria-hidden="true" />
         </ToolbarButton>
       </div>

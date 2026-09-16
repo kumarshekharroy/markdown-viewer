@@ -14,11 +14,17 @@ export function TocPanel({
   searchOptions,
   searchCursor,
   matchCount,
+  replaceOpen,
+  replaceText,
   onOpenSearch,
   onCloseSearch,
   onSearchQueryChange,
   onSearchOptionsChange,
   onMoveSearch,
+  onToggleReplace,
+  onReplaceTextChange,
+  onReplaceCurrent,
+  onReplaceAll,
   onNavigateHeading,
   onResizePointerDown,
   onResizeKeyDown
@@ -33,11 +39,17 @@ export function TocPanel({
   searchOptions: SearchOptions;
   searchCursor: number;
   matchCount: number;
+  replaceOpen: boolean;
+  replaceText: string;
   onOpenSearch: () => void;
   onCloseSearch: () => void;
   onSearchQueryChange: (value: string) => void;
   onSearchOptionsChange: React.Dispatch<React.SetStateAction<SearchOptions>>;
   onMoveSearch: (direction: 'next' | 'previous') => void;
+  onToggleReplace: () => void;
+  onReplaceTextChange: (value: string) => void;
+  onReplaceCurrent: () => void;
+  onReplaceAll: () => void;
   onNavigateHeading: (id: string) => void;
   onResizePointerDown: (side: PanelSide, event: React.PointerEvent) => void;
   onResizeKeyDown: (side: PanelSide, event: React.KeyboardEvent) => void;
@@ -135,6 +147,36 @@ export function TocPanel({
                 Whole word
               </label>
             </div>
+            <button
+              type="button"
+              className="toc-search__replace-toggle"
+              aria-expanded={replaceOpen}
+              onClick={onToggleReplace}
+            >
+              {replaceOpen ? 'Hide replace' : 'Replace'}
+            </button>
+            {replaceOpen ? (
+              <div className="toc-search__replace">
+                <label>
+                  <span className="visually-hidden">Replacement text</span>
+                  <input
+                    type="text"
+                    value={replaceText}
+                    onChange={(event) => onReplaceTextChange(event.target.value)}
+                    placeholder="Replace with"
+                  />
+                </label>
+                <div className="toc-search__replace-actions">
+                  <button type="button" onClick={onReplaceCurrent} disabled={matchCount === 0}>
+                    Replace current
+                  </button>
+                  <button type="button" onClick={onReplaceAll} disabled={matchCount === 0}>
+                    Replace all
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <span className="toc-search__hint">Searches Markdown source</span>
           </section>
         </div>
       ) : null}

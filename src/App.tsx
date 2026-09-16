@@ -2,6 +2,8 @@ import { usePanelResize } from './hooks/usePanelResize';
 import { useWorkspacePersistence, loadFolderExpansion } from './hooks/useWorkspacePersistence';
 import { useReaderScroll } from './hooks/useReaderScroll';
 import { loadScrollPosition } from './lib/scrollPositions';
+import { buildHeadingScrollAnchors, mapAnchoredScroll } from './lib/scrollSync';
+import { findSourceMatches, replaceAllSourceMatches, replaceSourceMatch } from './lib/search';
 import { EdgePanelToggle } from './components/SidebarControls';
 import { normalizeDocumentTitle } from './lib/documentTitle';
 import { DEFAULT_PREFS, loadPreferences, resetDockPreferences, clamp } from './lib/preferences';
@@ -29,6 +31,7 @@ import {
 import type { EditorView } from '@codemirror/view';
 import {
   Check,
+  Columns2,
   Edit3,
   FilePlus2,
   FolderOpen,
@@ -70,7 +73,6 @@ import { parseFrontMatter } from './lib/frontmatter';
 import { subscribeToFileLaunches } from './lib/fileLaunch';
 import {
   convertGitHubBlobUrl,
-  countMatches,
   displayNameFromPath,
   extractHeadings,
   resolveRelativePath
@@ -79,14 +81,15 @@ import {
   clearApplicationData,
   deleteDraft,
   getRecent,
+  getDrafts,
   getWorkspaceSession,
-  latestDraft,
   removeRecent,
   saveDraft,
   upsertRecent
 } from './lib/storage';
 import type {
   DocumentState,
+  DocumentTab,
   DraftRecord,
   FolderDocument,
   FolderState,
@@ -126,13 +129,28 @@ export default function App() {
   const resolvedTheme = resolveTheme(preferences.theme, systemDark);
   const dark = isDarkTheme(resolvedTheme);
   const [isEditing, setIsEditing] = useState(false);
-  const [documentState, setDocumentState] = useState<DocumentState>(() =>
-    documentFromContent(exampleDocument, 'Markdown Viewer Example', 'Example document', {
-      id: 'example-document',
-      path: 'example.md'
-    })
-  );
-  const [dirty, setDirty] = useState(false);
+  const [splitView, setSplitView] = useState(false);
+  const [splitRatio, setSplitRatio] = useState(loadSplitRatio);
+  const [tabs, setTabs] = useState<DocumentTab[]>(() => [
+    {
+      tabId: 'example-tab',
+      document: documentFromContent(
+        exampleDocument,
+        'Markdown Viewer Example',
+        'Example document',
+        {
+          id: 'example-document',
+          path: 'example.md'
+        }
+      ),
+      dirty: false
+    }
+  ]);
+  const [activeTabId, setActiveTabId] = useState('example-tab');
+  const activeTab = tabs.find((tab) => tab.tabId === activeTabId) ?? tabs[0];
+  const documentState = activeTab.document;
+  const dirty = activeTab.dirty;
+  const anyDirty = tabs.some((tab) => tab.dirty);
   const [notice, setNotice] = useState<Notice>({
     message: 'Example document loaded. Open, paste, or drop a Markdown file to begin.',
     tone: 'info'
@@ -141,9 +159,12 @@ export default function App() {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set());
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [recent, setRecent] = useState<RecentDocument[]>([]);
-  const [recoverableDraft, setRecoverableDraft] = useState<DraftRecord | undefined>();
+  const [recoverableDrafts, setRecoverableDrafts] = useState<DraftRecord[]>([]);
+  const recoverableDraft = recoverableDrafts[0];
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [replaceText, setReplaceText] = useState('');
+  const [replaceOpen, setReplaceOpen] = useState(false);
   const [searchOptions, setSearchOptions] = useState<SearchOptions>({
     caseSensitive: false,
     wholeWord: false
@@ -172,7 +193,31 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const articleRef = useRef<HTMLElement>(null);
   const scrollContainerRef = useRef<HTMLElement>(null);
+  const previewPaneRef = useRef<HTMLElement>(null);
+  const splitSyncRef = useRef(false);
   const pendingScrollRatioRef = useRef<number | null>(null);
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+
+  const updateActiveTab = useCallback(
+    (update: (tab: DocumentTab) => DocumentTab) => {
+      setTabs((current) => current.map((tab) => (tab.tabId === activeTabId ? update(tab) : tab)));
+    },
+    [activeTabId]
+  );
+
+  const readerContainer = useCallback(
+    () => (splitView && isEditing ? previewPaneRef.current : scrollContainerRef.current),
+    [splitView, isEditing]
+  );
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('markdown-viewer-split-ratio', String(splitRatio));
+    } catch {
+      // The split view still works when browser storage is unavailable.
+    }
+  }, [splitRatio]);
 
   const deferredContent = useDeferredValue(documentState.content);
   const contentToParse = isEditing ? deferredContent : documentState.content;
@@ -181,6 +226,65 @@ export default function App() {
     () => extractHeadings(parsed.body, parsed.raw?.length ?? 0),
     [parsed.body, parsed.raw]
   );
+
+  useEffect(() => {
+    if (!splitView || !isEditing || !editorView || !previewPaneRef.current) return;
+    const editor = editorView.scrollDOM;
+    const preview = previewPaneRef.current;
+    let anchors = buildHeadingScrollAnchors(
+      editorView,
+      preview,
+      articleRef.current,
+      toc,
+      compactLayout
+    );
+    let frame = 0;
+    const refreshAnchors = () => {
+      anchors = buildHeadingScrollAnchors(
+        editorView,
+        preview,
+        articleRef.current,
+        toc,
+        compactLayout
+      );
+    };
+    const sync = (source: HTMLElement, target: HTMLElement, direction: 'editor' | 'preview') => {
+      if (splitSyncRef.current) return;
+      const next = mapAnchoredScroll(
+        source.scrollTop,
+        anchors,
+        direction,
+        Math.max(0, source.scrollHeight - source.clientHeight),
+        Math.max(0, target.scrollHeight - target.clientHeight)
+      );
+      if (Math.abs(target.scrollTop - next) < 1) return;
+      splitSyncRef.current = true;
+      target.scrollTop = next;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        splitSyncRef.current = false;
+      });
+    };
+    const fromEditor = () => sync(editor, preview, 'editor');
+    const fromPreview = () => sync(preview, editor, 'preview');
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(refreshAnchors);
+    if (articleRef.current) observer?.observe(articleRef.current);
+    observer?.observe(preview);
+    window.addEventListener('resize', refreshAnchors);
+    editor.addEventListener('scroll', fromEditor, { passive: true });
+    preview.addEventListener('scroll', fromPreview, { passive: true });
+    fromEditor();
+    return () => {
+      cancelAnimationFrame(frame);
+      splitSyncRef.current = false;
+      observer?.disconnect();
+      window.removeEventListener('resize', refreshAnchors);
+      editor.removeEventListener('scroll', fromEditor);
+      preview.removeEventListener('scroll', fromPreview);
+    };
+  }, [editorView, isEditing, splitView, activeTabId, toc, parsed.body, compactLayout]);
+
   const fileTree = useMemo(
     () => (folder ? buildFileTree(folder.documents, folder.name) : []),
     [folder]
@@ -189,11 +293,13 @@ export default function App() {
     () => new Map(folder?.documents.map((entry) => [entry.path, entry])),
     [folder]
   );
-  const searchText = isEditing ? documentState.content : renderedText || parsed.body;
-  const matchCount = useMemo(
-    () => countMatches(searchText, searchQuery, searchOptions),
-    [searchOptions, searchQuery, searchText]
+  const activeFolderDocument =
+    folder?.documents.some((entry) => entry.id === documentState.id) ?? false;
+  const sourceMatches = useMemo(
+    () => findSourceMatches(documentState.content, searchQuery, searchOptions),
+    [documentState.content, searchQuery, searchOptions]
   );
+  const matchCount = sourceMatches.length;
 
   const announce = useCallback((message: string, tone: NoticeTone = 'info') => {
     setNotice({ message, tone });
@@ -211,19 +317,28 @@ export default function App() {
         setRecent(recentDocuments);
         if (session?.document) {
           const legacyEntries = session.folder?.documents.filter(isLegacyUnsavedFolderEntry) ?? [];
-          const detachedDocument = legacyEntries.some((entry) => entry.id === session.document.id);
-          setDocumentState(
-            detachedDocument
-              ? {
-                  ...session.document,
-                  path: undefined,
-                  fileHandle: undefined,
-                  canDirectSave: false,
-                  sourceLabel: filenameForMarkdown(session.document.title)
-                }
-              : session.document
+          const restoredTabs = session.tabs?.length
+            ? session.tabs
+            : [{ tabId: session.document.id, document: session.document, dirty: session.dirty }];
+          setTabs(
+            restoredTabs.map((tab) => ({
+              ...tab,
+              document: legacyEntries.some((entry) => entry.id === tab.document.id)
+                ? {
+                    ...tab.document,
+                    path: undefined,
+                    fileHandle: undefined,
+                    canDirectSave: false,
+                    sourceLabel: filenameForMarkdown(tab.document.title)
+                  }
+                : tab.document
+            }))
           );
-          setDirty(session.dirty);
+          setActiveTabId(
+            restoredTabs.some((tab) => tab.tabId === session.activeTabId)
+              ? session.activeTabId!
+              : restoredTabs[0].tabId
+          );
           setFolder(
             session.folder
               ? {
@@ -257,14 +372,15 @@ export default function App() {
 
   useEffect(() => {
     if (!workspaceReady) return;
-    latestDraft().then((draft) => {
-      if (draft?.dirty && draft.content.trim() && draft.id !== documentState.id) {
-        setRecoverableDraft(draft);
-      }
+    getDrafts().then((drafts) => {
+      const openIds = new Set(tabsRef.current.map((tab) => tab.document.id));
+      setRecoverableDrafts(
+        drafts.filter((draft) => draft.dirty && draft.content.trim() && !openIds.has(draft.id))
+      );
     });
-  }, [documentState.id, workspaceReady]);
+  }, [workspaceReady]);
 
-  useWorkspacePersistence(documentState, folder, expandedFolders, dirty, workspaceReady, () =>
+  useWorkspacePersistence(tabs, activeTabId, folder, expandedFolders, workspaceReady, () =>
     announce('The current workspace could not be remembered.', 'warning')
   );
   useReaderScroll(documentState.id, isEditing, workspaceReady, scrollContainerRef);
@@ -327,43 +443,48 @@ export default function App() {
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!dirty) return;
+      if (!anyDirty) return;
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [dirty]);
+  }, [anyDirty]);
 
   useEffect(() => {
-    if (!dirty) return undefined;
+    const dirtyTabs = tabs.filter((tab) => tab.dirty);
+    if (dirtyTabs.length === 0) return undefined;
     const timer = window.setTimeout(() => {
-      saveDraft({
-        id: documentState.id,
-        title: documentState.title,
-        content: documentState.content,
-        sourceLabel: documentState.sourceLabel,
-        sourceUrl: documentState.sourceUrl,
-        path: documentState.path,
-        updatedAt: Date.now(),
-        dirty
-      }).catch(() =>
+      Promise.all(
+        dirtyTabs.map(({ document: doc }) =>
+          saveDraft({
+            id: doc.id,
+            title: doc.title,
+            content: doc.content,
+            sourceLabel: doc.sourceLabel,
+            sourceUrl: doc.sourceUrl,
+            path: doc.path,
+            updatedAt: Date.now(),
+            dirty: true
+          })
+        )
+      ).catch(() =>
         announce('Draft recovery could not be updated in this browser session.', 'warning')
       );
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [announce, dirty, documentState]);
+  }, [announce, tabs]);
 
   useEffect(() => {
-    if (isEditing || !searchOpen) return;
+    if ((isEditing && !splitView) || !searchOpen) return;
     const timer = window.setTimeout(() => {
       setRenderedText(articleRef.current?.textContent ?? '');
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [parsed.body, isEditing, searchOpen]);
+  }, [parsed.body, isEditing, splitView, searchOpen]);
 
   useEffect(() => {
-    if (isEditing || !searchOpen || !searchQuery.trim()) {
+    if ((isEditing && !splitView) || !searchOpen || !searchQuery.trim()) {
       clearRenderedSearchHighlights();
       return undefined;
     }
@@ -380,6 +501,7 @@ export default function App() {
     };
   }, [
     isEditing,
+    splitView,
     matchCount,
     parsed.body,
     renderedText,
@@ -402,11 +524,14 @@ export default function App() {
           setActiveHeading(visible.target.id);
         }
       },
-      { root: scrollContainerRef.current, rootMargin: '-20% 0px -65% 0px' }
+      {
+        root: splitView && isEditing ? previewPaneRef.current : scrollContainerRef.current,
+        rootMargin: '-20% 0px -65% 0px'
+      }
     );
     headings.forEach((heading) => observer.observe(heading));
     return () => observer.disconnect();
-  }, [toc, parsed.body, isEditing]);
+  }, [toc, parsed.body, isEditing, splitView]);
 
   useEffect(() => {
     if (pendingScrollRatioRef.current === null) return undefined;
@@ -423,8 +548,9 @@ export default function App() {
 
   useEffect(() => {
     const handleKeydown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+      if ((event.metaKey || event.ctrlKey) && ['f', 'h'].includes(event.key.toLowerCase())) {
         event.preventDefault();
+        if (event.key.toLowerCase() === 'h') setReplaceOpen(true);
         setPreferences((current) => ({ ...current, tocVisible: true }));
         if (compactLayout) {
           setMobileTocOpen(true);
@@ -443,7 +569,6 @@ export default function App() {
       const text = event.clipboardData?.getData('text/plain');
       if (!text || text.trim().length < 3 || !looksLikeMarkdown(text)) return;
       event.preventDefault();
-      if (!(await confirmReplace())) return;
       applyDocument(
         documentFromContent(text, 'Pasted Markdown', 'Clipboard paste', {
           path: 'pasted.md'
@@ -456,23 +581,48 @@ export default function App() {
     return () => window.removeEventListener('paste', handlePaste);
   });
 
-  const confirmReplace = useCallback(async () => {
-    if (!dirty) return true;
-    return window.confirm('This document has unsaved changes. Replace it anyway?');
-  }, [dirty]);
-
   const applyDocument = useCallback((next: DocumentState, markDirty: boolean) => {
-    setDocumentState(next);
-    setDirty(markDirty);
+    const existing = tabsRef.current.find((tab) => tab.document.id === next.id);
+    if (existing) {
+      setActiveTabId(existing.tabId);
+    } else {
+      const tabId = crypto.randomUUID();
+      setTabs((current) => [...current, { tabId, document: next, dirty: markDirty }]);
+      setActiveTabId(tabId);
+      if (!markDirty) deleteDraft(next.id).catch(() => undefined);
+    }
     setSearchCursor(0);
     setActiveHeading('');
     if (window.location.hash) {
       window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
     }
-    if (!markDirty) {
-      deleteDraft(next.id).catch(() => undefined);
-    }
   }, []);
+
+  const closeTab = (tabId: string) => {
+    const tab = tabs.find((entry) => entry.tabId === tabId);
+    if (!tab) return;
+    if (tab.dirty && !window.confirm(`Discard unsaved changes to ${tab.document.title}?`)) return;
+    if (tab.dirty) deleteDraft(tab.document.id).catch(() => undefined);
+    const remaining = tabs.filter((entry) => entry.tabId !== tabId);
+    if (remaining.length === 0) {
+      const replacement = documentFromContent(
+        exampleDocument,
+        'Markdown Viewer Example',
+        'Example document',
+        {
+          id: 'example-document',
+          path: 'example.md'
+        }
+      );
+      const fallback = { tabId: crypto.randomUUID(), document: replacement, dirty: false };
+      setTabs([fallback]);
+      setActiveTabId(fallback.tabId);
+    } else {
+      setTabs(remaining);
+      if (activeTabId === tabId)
+        setActiveTabId(remaining[Math.max(0, tabs.indexOf(tab) - 1)].tabId);
+    }
+  };
 
   const rememberDocument = useCallback(
     async (doc: DocumentState) => {
@@ -495,7 +645,7 @@ export default function App() {
 
     return subscribeToFileLaunches(async (handles) => {
       const handle = handles[0];
-      if (!handle || !(await confirmReplace())) return;
+      if (!handle) return;
 
       try {
         const allowed = await verifyPermission(handle, 'read');
@@ -524,12 +674,10 @@ export default function App() {
         announce(errorMessage(error, 'The file passed to the app could not be opened.'), 'error');
       }
     });
-  }, [announce, applyDocument, confirmReplace, rememberDocument, workspaceReady]);
+  }, [announce, applyDocument, rememberDocument, workspaceReady]);
 
   const createDocument = async () => {
-    if (!(await confirmReplace())) return;
-
-    const filename = nextUntitledFilename(folder);
+    const filename = nextUntitledFilename(folder, tabs);
     applyDocument(
       documentFromContent('', filename, filename, {
         id: `new-${crypto.randomUUID()}`
@@ -546,8 +694,6 @@ export default function App() {
   };
 
   const openFile = async () => {
-    if (!(await confirmReplace())) return;
-
     if (window.showOpenFilePicker) {
       try {
         const [handle] = await window.showOpenFilePicker({
@@ -581,7 +727,6 @@ export default function App() {
   const handleFileInput = async (files: FileList | null) => {
     const file = files?.[0];
     if (!file) return;
-    if (!(await confirmReplace())) return;
     try {
       const content = await readMarkdownFile(file);
       const doc = documentFromContent(content, displayNameFromPath(file.name), file.name, {
@@ -602,8 +747,6 @@ export default function App() {
   };
 
   const openFolder = async () => {
-    if (!(await confirmReplace())) return;
-
     if (window.showDirectoryPicker) {
       try {
         const handle = await window.showDirectoryPicker();
@@ -620,7 +763,6 @@ export default function App() {
 
   const handleDirectoryInput = async (files: FileList | null) => {
     if (!files?.length) return;
-    if (!(await confirmReplace())) return;
     try {
       await applyFolder(await folderFromInputFiles(files));
     } catch (error) {
@@ -631,21 +773,29 @@ export default function App() {
   };
 
   const applyFolder = async (nextFolder: FolderState) => {
+    const folderKey = crypto.randomUUID();
+    const identifiedFolder = {
+      ...nextFolder,
+      documents: nextFolder.documents.map((entry) => ({
+        ...entry,
+        id: `${folderKey}:${entry.path}`
+      }))
+    };
     setFolder((previous) => {
       previous?.assets.forEach((url) => URL.revokeObjectURL(url));
-      return nextFolder;
+      return identifiedFolder;
     });
 
-    if (nextFolder.documents.length === 0) {
+    if (identifiedFolder.documents.length === 0) {
       setExpandedFolders(new Set());
       announce('No supported Markdown files were found in that folder.', 'warning');
       return;
     }
 
     setExpandedFolders(
-      new Set(collectFolderPaths(buildFileTree(nextFolder.documents, nextFolder.name)))
+      new Set(collectFolderPaths(buildFileTree(identifiedFolder.documents, identifiedFolder.name)))
     );
-    const first = nextFolder.documents[0];
+    const first = identifiedFolder.documents[0];
     const doc = documentFromFolderDocument(first);
     applyDocument(doc, false);
     await rememberDocument(doc);
@@ -654,7 +804,7 @@ export default function App() {
       setMobileFilesOpen(true);
     }
     announce(
-      `${nextFolder.documents.length} Markdown file${nextFolder.documents.length === 1 ? '' : 's'} found in ${nextFolder.name}.`,
+      `${identifiedFolder.documents.length} Markdown file${identifiedFolder.documents.length === 1 ? '' : 's'} found in ${identifiedFolder.name}.`,
       'success'
     );
   };
@@ -671,12 +821,12 @@ export default function App() {
         if (compactLayout) setMobileTocOpen(false);
         return;
       }
-      if (scrollHeadingIntoView(cleanId, preferences.reducedMotion, scrollContainerRef.current)) {
+      if (scrollHeadingIntoView(cleanId, preferences.reducedMotion, readerContainer())) {
         setActiveHeading(cleanId);
         if (compactLayout) setMobileTocOpen(false);
       }
     },
-    [compactLayout, editorView, isEditing, preferences.reducedMotion, toc]
+    [compactLayout, editorView, isEditing, readerContainer, preferences.reducedMotion, toc]
   );
 
   useEffect(() => {
@@ -696,7 +846,6 @@ export default function App() {
         if (compactLayout) setMobileFilesOpen(false);
         return;
       }
-      if (!(await confirmReplace())) return;
       if (folder) {
         const parentPaths = getParentFolderPaths(entry.path, folder.name);
         setExpandedFolders((current) => new Set([...current, ...parentPaths]));
@@ -709,28 +858,26 @@ export default function App() {
         window.setTimeout(() => scrollToHeading(hash), 120);
       }
     },
-    [
-      documentState.id,
-      confirmReplace,
-      folder,
-      applyDocument,
-      rememberDocument,
-      scrollToHeading,
-      compactLayout
-    ]
+    [documentState.id, folder, applyDocument, rememberDocument, scrollToHeading, compactLayout]
   );
 
   const resolveAsset = useCallback(
     (src: string) => {
-      if (!folder || !documentState.path || /^(https?:|data:|blob:)/i.test(src)) return undefined;
+      if (
+        !folder ||
+        !activeFolderDocument ||
+        !documentState.path ||
+        /^(https?:|data:|blob:)/i.test(src)
+      )
+        return undefined;
       return folder.assets.get(resolveRelativePath(documentState.path, src));
     },
-    [documentState.path, folder]
+    [documentState.path, folder, activeFolderDocument]
   );
 
   const navigateLocal = useCallback(
     (href: string) => {
-      if (!folder || !documentState.path) return;
+      if (!folder || !activeFolderDocument || !documentState.path) return;
       const hash = href.includes('#') ? `#${href.split('#').slice(1).join('#')}` : undefined;
       const targetPath = resolveRelativePath(documentState.path, href);
       const entry = documentsByPath.get(targetPath);
@@ -740,19 +887,26 @@ export default function App() {
       }
       openFolderDocument(entry, hash);
     },
-    [folder, documentState.path, documentsByPath, announce, openFolderDocument]
+    [
+      folder,
+      activeFolderDocument,
+      documentState.path,
+      documentsByPath,
+      announce,
+      openFolderDocument
+    ]
   );
 
   const saveDocument = async () => {
     try {
       if (documentState.fileHandle && documentState.canDirectSave) {
         await saveToFileHandle(documentState.fileHandle, documentState.content);
-        markSaved();
+        markSaved(documentState);
         announce('Changes saved to the original file.', 'success');
         return;
       }
       downloadText(filenameForMarkdown(documentState.title), documentState.content);
-      markSaved();
+      markSaved(documentState);
       announce(
         'Updated Markdown downloaded. The original file was not modified by the browser.',
         'success'
@@ -768,7 +922,7 @@ export default function App() {
         filenameForMarkdown(documentState.title),
         documentState.content
       );
-      markSaved();
+      markSaved(documentState);
       announce(direct ? 'Saved as a new file.' : 'Updated Markdown downloaded.', 'success');
     } catch (error) {
       if (isAbort(error)) return;
@@ -776,18 +930,24 @@ export default function App() {
     }
   };
 
-  const markSaved = () => {
-    setDirty(false);
-    deleteDraft(documentState.id).catch(() => undefined);
-    if (folder && documentState.path) {
+  const markSaved = (saved: DocumentState) => {
+    setTabs((current) =>
+      current.map((tab) =>
+        tab.document.id === saved.id
+          ? { ...tab, dirty: tab.document.content !== saved.content }
+          : tab
+      )
+    );
+    deleteDraft(saved.id).catch(() => undefined);
+    if (folder && saved.path && folder.documents.some((entry) => entry.id === saved.id)) {
       setFolder({
         ...folder,
         documents: folder.documents.map((entry) =>
-          entry.path === documentState.path ? { ...entry, content: documentState.content } : entry
+          entry.id === saved.id ? { ...entry, content: saved.content } : entry
         )
       });
     }
-    rememberDocument(documentState).catch(() => undefined);
+    rememberDocument(saved).catch(() => undefined);
   };
 
   const copyRaw = async () => {
@@ -817,7 +977,6 @@ export default function App() {
         announce('Clipboard text is empty.', 'warning');
         return;
       }
-      if (!(await confirmReplace())) return;
       const doc = documentFromContent(text, 'Pasted Markdown', 'Clipboard paste', {
         path: 'pasted.md'
       });
@@ -829,7 +988,6 @@ export default function App() {
   };
 
   const loadExample = async () => {
-    if (!(await confirmReplace())) return;
     applyDocument(
       documentFromContent(exampleDocument, 'Markdown Viewer Example', 'Example document', {
         id: 'example-document',
@@ -846,8 +1004,6 @@ export default function App() {
       announce('Enter a public Markdown URL.', 'warning');
       return;
     }
-    if (!(await confirmReplace())) return;
-
     let url: URL;
     try {
       url = new URL(convertGitHubBlobUrl(trimmed));
@@ -904,6 +1060,11 @@ export default function App() {
   };
 
   const reopenRecent = async (item: RecentDocument) => {
+    const openTab = tabs.find((tab) => tab.document.id === item.id);
+    if (openTab) {
+      setActiveTabId(openTab.tabId);
+      return;
+    }
     if (item.fileHandle) {
       try {
         const allowed = await verifyPermission(item.fileHandle, 'read');
@@ -953,8 +1114,9 @@ export default function App() {
       return;
     await clearApplicationData();
     setRecent([]);
-    setRecoverableDraft(undefined);
+    setRecoverableDrafts([]);
     setPreferences(DEFAULT_PREFS);
+    setSplitRatio(50);
     announce('Local application data cleared from this browser.', 'success');
   };
 
@@ -973,14 +1135,14 @@ export default function App() {
       ),
       true
     );
-    setRecoverableDraft(undefined);
+    setRecoverableDrafts((current) => current.filter((draft) => draft.id !== recoverableDraft.id));
     announce('Unsaved draft restored from this browser.', 'success');
   };
 
   const discardDraft = async () => {
     if (!recoverableDraft) return;
     await deleteDraft(recoverableDraft.id);
-    setRecoverableDraft(undefined);
+    setRecoverableDrafts((current) => current.filter((draft) => draft.id !== recoverableDraft.id));
     announce('Recovered draft discarded.', 'info');
   };
 
@@ -991,10 +1153,12 @@ export default function App() {
     await handleFileInput(event.dataTransfer.files);
   };
 
-  const updateContent = useCallback((content: string) => {
-    setDocumentState((current) => ({ ...current, content }));
-    setDirty(true);
-  }, []);
+  const updateContent = useCallback(
+    (content: string) => {
+      updateActiveTab((tab) => ({ ...tab, document: { ...tab.document, content }, dirty: true }));
+    },
+    [updateActiveTab]
+  );
 
   const moveSearch = (direction: 'next' | 'previous') => {
     if (!searchQuery.trim()) return;
@@ -1020,12 +1184,38 @@ export default function App() {
       const range = findRenderedSearchRanges(articleRef.current, searchQuery, searchOptions)[
         nextCursor - 1
       ];
-      if (!range) return;
+      if (!range) {
+        const match = sourceMatches[nextCursor - 1];
+        const container = readerContainer();
+        if (match && container)
+          restoreScrollRatio(container, match.from / Math.max(1, documentState.content.length));
+        return;
+      }
       const selection = window.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
-      scrollRangeIntoStage(range, scrollContainerRef.current, preferences.reducedMotion);
+      scrollRangeIntoStage(range, readerContainer(), preferences.reducedMotion);
     }, 0);
+  };
+
+  const replaceCurrent = () => {
+    const index = searchCursor > 0 ? searchCursor - 1 : 0;
+    const match = sourceMatches[index];
+    if (!match) return;
+    updateContent(replaceSourceMatch(documentState.content, match, replaceText));
+    setSearchCursor(index + 1 <= matchCount - 1 ? index + 1 : 0);
+  };
+
+  const replaceAll = () => {
+    if (!matchCount) return;
+    updateContent(
+      replaceAllSourceMatches(documentState.content, searchQuery, searchOptions, replaceText)
+    );
+    setSearchCursor(0);
+    announce(
+      `Replaced ${matchCount} match${matchCount === 1 ? '' : 'es'} in ${documentState.title}.`,
+      'success'
+    );
   };
 
   const resetDock = () => {
@@ -1057,6 +1247,7 @@ export default function App() {
 
   const closeSearch = () => {
     setSearchOpen(false);
+    setReplaceOpen(false);
     setSearchCursor(0);
   };
 
@@ -1070,6 +1261,44 @@ export default function App() {
   const toggleEditing = () => {
     captureScrollRatio();
     setIsEditing((current) => !current);
+  };
+
+  const startSplitResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const stage = scrollContainerRef.current;
+    if (!stage) return;
+    const rect = stage.getBoundingClientRect();
+    const update = (pointer: PointerEvent) => {
+      const percentage = compactLayout
+        ? ((pointer.clientY - rect.top) / rect.height) * 100
+        : ((pointer.clientX - rect.left) / rect.width) * 100;
+      setSplitRatio(clamp(percentage, 25, 75));
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', update);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+    };
+    window.addEventListener('pointermove', update);
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+  };
+
+  const resizeSplitByKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const delta = compactLayout
+      ? event.key === 'ArrowDown'
+        ? 5
+        : event.key === 'ArrowUp'
+          ? -5
+          : 0
+      : event.key === 'ArrowRight'
+        ? 5
+        : event.key === 'ArrowLeft'
+          ? -5
+          : 0;
+    if (!delta) return;
+    event.preventDefault();
+    setSplitRatio((current) => clamp(current + delta, 25, 75));
   };
 
   const toggleFilePanel = () => {
@@ -1106,7 +1335,8 @@ export default function App() {
     '--toc-panel-width': `${preferences.tocPanelWidth}px`,
     '--viewport-right-offset': `${viewportRightOffset}px`,
     '--reader-controls-left-space': `${!compactLayout && preferences.filePanelVisible ? preferences.filePanelWidth : 0}px`,
-    '--reader-controls-right-space': `${!compactLayout && preferences.tocVisible ? preferences.tocPanelWidth : 0}px`
+    '--reader-controls-right-space': `${!compactLayout && preferences.tocVisible ? preferences.tocPanelWidth : 0}px`,
+    '--split-editor-width': `${splitRatio}%`
   } as React.CSSProperties;
 
   useLayoutEffect(() => {
@@ -1115,7 +1345,7 @@ export default function App() {
 
   return (
     <div
-      className="app"
+      className={`app ${isEditing ? 'app--editing' : ''}`}
       style={appStyle}
       aria-busy={!workspaceReady}
       onDragOver={(event) => event.preventDefault()}
@@ -1159,6 +1389,15 @@ export default function App() {
               <Edit3 size={18} aria-hidden="true" />
             )}
           </IconToggle>
+          {isEditing ? (
+            <IconToggle
+              label={splitView ? 'Hide live preview' : 'Show live preview beside editor'}
+              pressed={splitView}
+              onClick={() => setSplitView((current) => !current)}
+            >
+              <Columns2 size={18} aria-hidden="true" />
+            </IconToggle>
+          ) : null}
           <IconToggle
             label={`Switch to ${dark ? 'light' : 'dark'} mode`}
             onClick={() =>
@@ -1192,6 +1431,54 @@ export default function App() {
         </div>
       </header>
 
+      <nav className="document-tabs" aria-label="Open documents">
+        <div className="document-tabs__list" role="tablist" aria-label="Open documents">
+          {tabs.map((tab) => (
+            <div className="document-tab" key={tab.tabId}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab.tabId === activeTabId}
+                aria-controls="document-stage"
+                className="document-tab__select"
+                title={tab.document.sourceLabel}
+                onClick={() => {
+                  setActiveTabId(tab.tabId);
+                  setSearchCursor(0);
+                  setActiveHeading('');
+                  setEditorView(null);
+                }}
+              >
+                <span className="document-tab__title">
+                  {normalizeDocumentTitle(tab.document.title)}
+                </span>
+                {tab.dirty ? (
+                  <span className="document-tab__dirty" aria-label="Unsaved changes">
+                    ●
+                  </span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                className="document-tab__close"
+                aria-label={`Close ${tab.document.title}`}
+                onClick={() => closeTab(tab.tabId)}
+              >
+                <X size={15} aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="document-tabs__new"
+          aria-label="New Markdown tab"
+          onClick={createDocument}
+        >
+          <FilePlus2 size={17} aria-hidden="true" />
+        </button>
+      </nav>
+
       <input
         ref={fileInputRef}
         className="visually-hidden"
@@ -1219,6 +1506,9 @@ export default function App() {
             <strong>Unsaved draft found</strong>
             <span>
               {recoverableDraft.title} from {new Date(recoverableDraft.updatedAt).toLocaleString()}
+              {recoverableDrafts.length > 1
+                ? ` · ${recoverableDrafts.length - 1} more draft${recoverableDrafts.length === 2 ? '' : 's'}`
+                : ''}
             </span>
           </div>
           <div className="recovery-banner__actions">
@@ -1295,7 +1585,7 @@ export default function App() {
                     <FileTree
                       nodes={fileTree}
                       expandedFolders={expandedFolders}
-                      activePath={documentState.path}
+                      activePath={activeFolderDocument ? documentState.path : undefined}
                       dirty={dirty}
                       onToggleFolder={toggleFolderExpanded}
                       onOpenDocument={openFolderDocument}
@@ -1317,7 +1607,9 @@ export default function App() {
                         key={item.id}
                         className={[
                           item.id === documentState.id ? 'is-active' : '',
-                          dirty && item.id === documentState.id ? 'is-dirty' : ''
+                          tabs.some((tab) => tab.dirty && tab.document.id === item.id)
+                            ? 'is-dirty'
+                            : ''
                         ]
                           .filter(Boolean)
                           .join(' ')}
@@ -1353,8 +1645,9 @@ export default function App() {
         ) : null}
 
         <main
+          id="document-stage"
           ref={scrollContainerRef}
-          className={`document-stage ${isEditing ? 'document-stage--edit' : 'document-stage--read'}`}
+          className={`document-stage ${isEditing ? 'document-stage--edit' : 'document-stage--read'} ${isEditing && splitView ? 'document-stage--split' : ''}`}
           tabIndex={-1}
         >
           {parsed.error ? (
@@ -1372,14 +1665,67 @@ export default function App() {
               articleRef={articleRef}
             />
           ) : null}
-          {isEditing ? (
+          {isEditing && splitView ? (
+            <>
+              <section className="split-editor-pane" aria-label="Markdown source">
+                <Suspense fallback={<EditorFallback />}>
+                  <MarkdownEditor
+                    key={activeTabId}
+                    value={documentState.content}
+                    onChange={updateContent}
+                    dark={dark}
+                    lineWrap={preferences.codeWrap}
+                    onEditorReady={setEditorView}
+                    onOpenSearch={openSearch}
+                    searchOpen={searchOpen}
+                    searchQuery={searchQuery}
+                    searchOptions={searchOptions}
+                  />
+                </Suspense>
+              </section>
+              <div
+                className="split-divider"
+                role="separator"
+                tabIndex={0}
+                aria-label="Resize editor and preview"
+                aria-orientation={compactLayout ? 'horizontal' : 'vertical'}
+                aria-valuemin={25}
+                aria-valuemax={75}
+                aria-valuenow={splitRatio}
+                onPointerDown={startSplitResize}
+                onKeyDown={resizeSplitByKeyboard}
+              />
+              <section
+                ref={previewPaneRef}
+                className="split-preview-pane"
+                aria-label="Live preview"
+              >
+                <MarkdownRenderer
+                  markdown={parsed.body}
+                  toc={toc}
+                  preferences={preferences}
+                  dark={dark}
+                  currentPath={documentState.path}
+                  resolveAsset={resolveAsset}
+                  onNavigateLocal={navigateLocal}
+                  articleRef={articleRef}
+                />
+              </section>
+            </>
+          ) : null}
+          {isEditing && !splitView ? (
             <Suspense fallback={<EditorFallback />}>
               <MarkdownEditor
+                key={activeTabId}
                 value={documentState.content}
                 onChange={updateContent}
                 dark={dark}
                 lineWrap={preferences.codeWrap}
                 onEditorReady={setEditorView}
+                onOpenSearch={openSearch}
+                searchOpen={searchOpen}
+                searchQuery={searchQuery}
+                searchOptions={searchOptions}
               />
             </Suspense>
           ) : null}
@@ -1409,14 +1755,23 @@ export default function App() {
             searchOptions={searchOptions}
             searchCursor={searchCursor}
             matchCount={matchCount}
+            replaceOpen={replaceOpen}
+            replaceText={replaceText}
             onOpenSearch={openSearch}
             onCloseSearch={closeSearch}
             onSearchQueryChange={(value) => {
               setSearchQuery(value);
               setSearchCursor(0);
             }}
-            onSearchOptionsChange={setSearchOptions}
+            onSearchOptionsChange={(update) => {
+              setSearchOptions(update);
+              setSearchCursor(0);
+            }}
             onMoveSearch={moveSearch}
+            onToggleReplace={() => setReplaceOpen((current) => !current)}
+            onReplaceTextChange={setReplaceText}
+            onReplaceCurrent={replaceCurrent}
+            onReplaceAll={replaceAll}
             onNavigateHeading={scrollToHeading}
             onResizePointerDown={startPanelResize}
             onResizeKeyDown={handlePanelResizeKeydown}
@@ -1499,9 +1854,9 @@ export default function App() {
           </p>
           <p>
             Draft recovery stores unsaved Markdown in IndexedDB on this device. Recent documents
-            store metadata, and the current workspace stores the open Markdown and folder tree so
-            they can be restored after a reload. Where the browser supports it, file handles still
-            require permission before reuse.
+            store metadata, and the current workspace stores open tabs, their unsaved Markdown, and
+            the folder tree so they can be restored after a reload. Where the browser supports it,
+            file handles still require permission before reuse.
           </p>
           <p>
             Loading a public URL uses the browser's normal network and CORS rules. Markdown Viewer
@@ -1558,11 +1913,11 @@ function documentFromFolderDocument(entry: FolderDocument): DocumentState {
   });
 }
 
-function nextUntitledFilename(folder: FolderState | null): string {
+function nextUntitledFilename(folder: FolderState | null, tabs: DocumentTab[]): string {
   const usedNames = new Set(
-    folder?.documents.map(
+    [...(folder?.documents ?? []), ...tabs.map((tab) => ({ path: tab.document.title }))].map(
       (document) => document.path.split('/').filter(Boolean).at(-1)?.toLowerCase() ?? ''
-    ) ?? []
+    )
   );
   let number = 1;
   let candidate = 'Untitled.md';
@@ -1587,6 +1942,15 @@ function isAbort(error: unknown): boolean {
 
 function isCompactLayout(): boolean {
   return window.matchMedia('(max-width: 980px)').matches;
+}
+
+function loadSplitRatio(): number {
+  try {
+    const stored = Number(localStorage.getItem('markdown-viewer-split-ratio'));
+    return Number.isFinite(stored) && stored >= 25 && stored <= 75 ? stored : 50;
+  } catch {
+    return 50;
+  }
 }
 
 function getViewportRightOffset(): number {

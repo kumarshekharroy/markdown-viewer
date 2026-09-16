@@ -45,6 +45,12 @@ export interface DocumentState {
   lastModified?: number;
 }
 
+export interface DocumentTab {
+  tabId: string;
+  document: DocumentState;
+  dirty: boolean;
+}
+
 export interface FolderDocument {
   id: string;
   name: string;
@@ -66,6 +72,8 @@ export interface WorkspaceSession {
   folder?: Pick<FolderState, 'name' | 'documents'>;
   expandedFolders: string[];
   dirty: boolean;
+  tabs?: DocumentTab[];
+  activeTabId?: string;
   updatedAt: number;
 }
 

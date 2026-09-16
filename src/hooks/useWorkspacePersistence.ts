@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { saveWorkspaceSession } from '../lib/storage';
-import type { DocumentState, FolderState } from '../types';
+import type { DocumentTab, FolderState } from '../types';
 
 export const TREE_STATE_KEY = 'markdown-viewer-tree-state';
 export function loadFolderExpansion(name: string | undefined, fallback: string[]): string[] {
@@ -15,10 +15,10 @@ export function loadFolderExpansion(name: string | undefined, fallback: string[]
 }
 
 export function useWorkspacePersistence(
-  documentState: DocumentState,
+  tabs: DocumentTab[],
+  activeTabId: string,
   folder: FolderState | null,
   expanded: Set<string>,
-  dirty: boolean,
   ready: boolean,
   onError: () => void
 ) {
@@ -41,16 +41,20 @@ export function useWorkspacePersistence(
   }, [expanded, folder?.name, ready]);
   useEffect(() => {
     if (!ready) return;
+    const active = tabs.find((tab) => tab.tabId === activeTabId) ?? tabs[0];
+    if (!active) return;
     const save = () =>
       saveWorkspaceSession({
         id: 'current',
-        document: documentState,
+        document: active.document,
+        tabs,
+        activeTabId: active.tabId,
         folder: folder ? { name: folder.name, documents: folder.documents } : undefined,
         expandedFolders: Array.from(expandedRef.current),
-        dirty,
+        dirty: active.dirty,
         updatedAt: Date.now()
       }).catch(() => onErrorRef.current());
     const timer = window.setTimeout(save, 300);
     return () => window.clearTimeout(timer);
-  }, [documentState, folder, dirty, ready]);
+  }, [tabs, activeTabId, folder, ready]);
 }
