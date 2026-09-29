@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Markdown Viewer by LunarPing</title>
+  <desc id="desc">Read and edit Markdown privately in your browser.</desc>
+  <rect width="1200" height="630" fill="#132c38"/>
+  <circle cx="1055" cy="-10" r="330" fill="#1a3b48"/>
+  <circle cx="1145" cy="-67" r="290" fill="#132c38"/>
+  <path d="M0 500C250 440 360 545 600 492s375-52 600 25v113H0Z" fill="#1b4350"/>
+  <rect x="76" y="81" width="96" height="96" rx="22" fill="#f7f5ef"/>
+  <path d="M101 100h33l18 18v42h-51z" fill="#ffffff" stroke="#264853" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M134 100v18h18" fill="#d7f0ea" stroke="#264853" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M111 132h28M111 143h22" stroke="#264853" stroke-width="4" stroke-linecap="round"/>
+  <path d="M151 131a17 17 0 1 0 8 31 18 18 0 0 1-8-31Z" fill="#39bfa4"/>
+  <text x="201" y="141" fill="#96e0d0" font-family="Arial, Helvetica, sans-serif" font-size="35" font-weight="700" letter-spacing="2">LUNARPING</text>
+  <text x="76" y="302" fill="#f7f5ef" font-family="Arial, Helvetica, sans-serif" font-size="71" font-weight="700">Markdown Viewer</text>
+  <text x="79" y="362" fill="#96e0d0" font-family="Arial, Helvetica, sans-serif" font-size="38">by LunarPing</text>
+  <text x="79" y="442" fill="#d7e9e6" font-family="Arial, Helvetica, sans-serif" font-size="31">Read and edit Markdown privately in your browser.</text>
+  <text x="79" y="562" fill="#96e0d0" font-family="Arial, Helvetica, sans-serif" font-size="25" letter-spacing="1">md.lunarping.com</text>
+</svg>

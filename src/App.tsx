@@ -33,6 +33,7 @@ import {
   Check,
   Columns2,
   Edit3,
+  FileText,
   FilePlus2,
   FolderOpen,
   Moon,
@@ -102,7 +103,9 @@ const MarkdownEditor = lazy(() =>
   import('./components/MarkdownEditor').then((module) => ({ default: module.MarkdownEditor }))
 );
 
-const APP_NAME = 'Markdown Viewer';
+const APP_NAME = 'Markdown Viewer by LunarPing';
+const TAB_DRAG_TYPE = 'application/x-lunarping-markdown-tab';
+type TabDropPosition = 'before' | 'after';
 
 const filePickerTypes = [
   {
@@ -147,6 +150,11 @@ export default function App() {
     }
   ]);
   const [activeTabId, setActiveTabId] = useState('example-tab');
+  const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
+  const [tabDropTarget, setTabDropTarget] = useState<{
+    tabId: string;
+    position: TabDropPosition;
+  } | null>(null);
   const activeTab = tabs.find((tab) => tab.tabId === activeTabId) ?? tabs[0];
   const documentState = activeTab.document;
   const dirty = activeTab.dirty;
@@ -622,6 +630,15 @@ export default function App() {
       if (activeTabId === tabId)
         setActiveTabId(remaining[Math.max(0, tabs.indexOf(tab) - 1)].tabId);
     }
+  };
+
+  const moveTab = (sourceId: string, targetId: string, position: TabDropPosition) => {
+    setTabs((current) => reorderTabs(current, sourceId, targetId, position));
+  };
+
+  const resetTabDrag = () => {
+    setDraggingTabId(null);
+    setTabDropTarget(null);
   };
 
   const rememberDocument = useCallback(
@@ -1352,13 +1369,15 @@ export default function App() {
       onDrop={onDrop}
     >
       <header className={`app-header ${isEditing ? 'is-editing' : ''}`}>
-        <div className="header-title-area">
+        <div className="header-title-area" role="group" aria-label={APP_NAME}>
           <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" className="brand-icon" />
-          <div className="title-block">
-            <span className="app-name">{APP_NAME}</span>
-            <strong title={documentState.sourceLabel}>
-              {normalizeDocumentTitle(documentState.title)}
-            </strong>
+          <div className="brand-lockup">
+            <span className="app-name">
+              Markdown <span>Viewer</span>
+            </span>
+            <span className="brand-attribution">
+              <span>by</span> <strong>LunarPing</strong>
+            </span>
           </div>
         </div>
 
@@ -1432,16 +1451,73 @@ export default function App() {
       </header>
 
       <nav className="document-tabs" aria-label="Open documents">
-        <div className="document-tabs__list" role="tablist" aria-label="Open documents">
+        <div
+          className="document-tabs__list"
+          role="tablist"
+          aria-label="Open documents"
+          onDragOver={() => draggingTabId && setTabDropTarget(null)}
+        >
           {tabs.map((tab) => (
-            <div className="document-tab" key={tab.tabId}>
+            <div
+              className={`document-tab ${draggingTabId === tab.tabId ? 'is-dragging' : ''} ${tabDropTarget?.tabId === tab.tabId ? `is-drop-${tabDropTarget.position}` : ''}`}
+              key={tab.tabId}
+              onDragOver={(event) => {
+                if (!draggingTabId || draggingTabId === tab.tabId) return;
+                event.preventDefault();
+                event.stopPropagation();
+                event.dataTransfer.dropEffect = 'move';
+                const bounds = event.currentTarget.getBoundingClientRect();
+                const position =
+                  event.clientX < bounds.left + bounds.width / 2 ? 'before' : 'after';
+                setTabDropTarget((current) =>
+                  current?.tabId === tab.tabId && current.position === position
+                    ? current
+                    : { tabId: tab.tabId, position }
+                );
+              }}
+              onDrop={(event) => {
+                if (!draggingTabId || !event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const bounds = event.currentTarget.getBoundingClientRect();
+                moveTab(
+                  draggingTabId,
+                  tab.tabId,
+                  event.clientX < bounds.left + bounds.width / 2 ? 'before' : 'after'
+                );
+                resetTabDrag();
+              }}
+            >
               <button
                 type="button"
                 role="tab"
                 aria-selected={tab.tabId === activeTabId}
                 aria-controls="document-stage"
+                aria-description="Drag to reorder. Press Alt+Shift+Arrow Left or Arrow Right to move this tab."
                 className="document-tab__select"
                 title={tab.document.sourceLabel}
+                draggable={tabs.length > 1}
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData(TAB_DRAG_TYPE, tab.tabId);
+                  setDraggingTabId(tab.tabId);
+                }}
+                onDragEnd={resetTabDrag}
+                onKeyDown={(event) => {
+                  if (!event.altKey || !event.shiftKey) return;
+                  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                  event.preventDefault();
+                  const index = tabs.findIndex((entry) => entry.tabId === tab.tabId);
+                  const nextIndex = index + (event.key === 'ArrowLeft' ? -1 : 1);
+                  const neighbor = tabs[nextIndex];
+                  if (!neighbor) return;
+                  moveTab(
+                    tab.tabId,
+                    neighbor.tabId,
+                    event.key === 'ArrowLeft' ? 'before' : 'after'
+                  );
+                  announce(`Moved ${tab.document.title} to tab position ${nextIndex + 1}.`);
+                }}
                 onClick={() => {
                   setActiveTabId(tab.tabId);
                   setSearchCursor(0);
@@ -1449,6 +1525,7 @@ export default function App() {
                   setEditorView(null);
                 }}
               >
+                <FileText size={15} className="document-tab__icon" aria-hidden="true" />
                 <span className="document-tab__title">
                   {normalizeDocumentTitle(tab.document.title)}
                 </span>
@@ -1782,6 +1859,7 @@ export default function App() {
       <EdgePanelToggle
         side="left"
         visible={renderFilePanel}
+        editing={isEditing}
         dirty={dirty}
         panelWidth={preferences.filePanelWidth}
         onClick={toggleFilePanel}
@@ -1789,6 +1867,7 @@ export default function App() {
       <EdgePanelToggle
         side="right"
         visible={renderTocPanel}
+        editing={isEditing}
         panelWidth={preferences.tocPanelWidth}
         rightOffset={viewportRightOffset}
         onClick={toggleTocPanel}
@@ -1810,8 +1889,8 @@ export default function App() {
           </label>
           <p>
             Standard GitHub blob links are converted to raw links when the path is clear. Private
-            repositories are not accessible because Markdown Viewer does not use authentication or
-            proxies.
+            repositories are not accessible because Markdown Viewer by LunarPing does not use
+            authentication or proxies.
           </p>
           <div className="dialog-actions">
             <button
@@ -1849,8 +1928,9 @@ export default function App() {
       >
         <div className="privacy-copy">
           <p>
-            Markdown Viewer runs entirely in this browser. Local files and opened folders are never
-            uploaded by the app, and there are no analytics, cookies, accounts, or tracking scripts.
+            Markdown Viewer by LunarPing runs entirely in this browser. Local files and opened
+            folders are never uploaded by the app, and there are no analytics, cookies, accounts, or
+            tracking scripts.
           </p>
           <p>
             Draft recovery stores unsaved Markdown in IndexedDB on this device. Recent documents
@@ -1860,7 +1940,8 @@ export default function App() {
           </p>
           <p>
             Loading a public URL uses the browser's normal network and CORS rules. Markdown Viewer
-            does not bypass private repository permissions or send content through a server proxy.
+            by LunarPing does not bypass private repository permissions or send content through a
+            server proxy.
           </p>
         </div>
       </Dialog>
@@ -1926,6 +2007,21 @@ function nextUntitledFilename(folder: FolderState | null, tabs: DocumentTab[]): 
     candidate = `Untitled-${number}.md`;
   }
   return candidate;
+}
+
+function reorderTabs(
+  tabs: DocumentTab[],
+  sourceId: string,
+  targetId: string,
+  position: TabDropPosition
+): DocumentTab[] {
+  const source = tabs.find((tab) => tab.tabId === sourceId);
+  if (!source || sourceId === targetId) return tabs;
+  const reordered = tabs.filter((tab) => tab.tabId !== sourceId);
+  const targetIndex = reordered.findIndex((tab) => tab.tabId === targetId);
+  if (targetIndex < 0) return tabs;
+  reordered.splice(targetIndex + (position === 'after' ? 1 : 0), 0, source);
+  return reordered;
 }
 
 function looksLikeMarkdown(text: string): boolean {

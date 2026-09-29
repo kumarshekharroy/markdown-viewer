@@ -6,7 +6,7 @@ export default defineConfig({
   expect: { timeout: 5_000 },
   webServer: {
     command: 'npm run dev -- --port 4175',
-    url: 'http://127.0.0.1:4175/markdown-viewer/',
+    url: 'http://127.0.0.1:4175/',
     reuseExistingServer: !process.env.CI
   },
   use: {

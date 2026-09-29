@@ -1,24 +1,24 @@
 {
-  "name": "Markdown Viewer",
-  "short_name": "MarkV",
+  "name": "Markdown Viewer by LunarPing",
+  "short_name": "Markdown Viewer",
   "description": "A private, offline-capable Markdown viewer and lightweight editor.",
-  "id": "/markdown-viewer/",
-  "start_url": "/markdown-viewer/",
-  "scope": "/markdown-viewer/",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "launch_handler": {
     "client_mode": "focus-existing"
   },
   "file_handlers": [
     {
-      "action": "/markdown-viewer/",
+      "action": "/",
       "accept": {
         "text/markdown": [".md", ".markdown", ".mdown"],
         "text/plain": [".txt"]
       },
       "icons": [
         {
-          "src": "/markdown-viewer/icon.svg",
+          "src": "/icon.svg",
           "sizes": "any",
           "type": "image/svg+xml"
         }
@@ -30,7 +30,7 @@
   "theme_color": "#f7f5ef",
   "icons": [
     {
-      "src": "/markdown-viewer/icon.svg",
+      "src": "/icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"

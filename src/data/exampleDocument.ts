@@ -8,9 +8,9 @@ tags:
 
 # Markdown Viewer Example
 
-Markdown Viewer is a read-first Markdown viewer with just enough editing power for quick corrections. Open a file, drop a folder, paste Markdown, or load public Markdown from a URL when the browser allows it. Inline snippets like \`example\` stay in the sentence instead of turning into blocks.
+Markdown Viewer by LunarPing is a read-first Markdown viewer with just enough editing power for quick corrections. Open a file, drop a folder, paste Markdown, or load public Markdown from a URL when the browser allows it. Inline snippets like \`example\` stay in the sentence instead of turning into blocks.
 
-> Your documents stay in this browser. Markdown Viewer does not upload files, phone home, or require an account.
+> Your documents stay in this browser. Markdown Viewer by LunarPing does not upload files, phone home, or require an account.
 
 ## What it renders
 
@@ -68,7 +68,7 @@ flowchart LR
 
 ## Footnote
 
-Markdown Viewer keeps private Markdown files local by design.[^privacy]
+Markdown Viewer by LunarPing keeps private Markdown files local by design.[^privacy]
 
 [^privacy]: Public URL loading uses the browser's normal fetch behavior, so CORS and network errors are surfaced instead of bypassed.
 `;

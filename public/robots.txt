@@ -1,4 +1,4 @@
 User-agent: *
-Allow: /markdown-viewer/
+Allow: /
 
-Sitemap: https://shekharroy.com/markdown-viewer/sitemap.xml
+Sitemap: https://md.lunarping.com/sitemap.xml

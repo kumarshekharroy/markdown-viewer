@@ -1,8 +1,8 @@
-# Markdown Viewer
+# Markdown Viewer by LunarPing
 
-Markdown Viewer is a small, private Markdown reader that runs in the browser. It is useful for reading notes, READMEs, and documentation without opening a full code editor or uploading files to a service.
+Markdown Viewer by LunarPing is a small, private Markdown reader that runs in the browser. It is useful for reading notes, READMEs, and documentation without opening a full code editor or uploading files to a service.
 
-Try it here: [shekharroy.com/markdown-viewer](https://shekharroy.com/markdown-viewer/)
+Try it here: [md.lunarping.com](https://md.lunarping.com/)
 
 ## What it does
 
@@ -12,13 +12,14 @@ Try it here: [shekharroy.com/markdown-viewer](https://shekharroy.com/markdown-vi
 - Lets you make quick edits and save them back to the original file when the browser allows it
 - Offers resizable side-by-side editing and live preview with synchronized scrolling
 - Remembers open tabs, each tab's unsaved changes and draft, reading position, and theme
+- Lets you drag open tabs into a new order (or use Alt+Shift+Left/Right while a tab is focused)
 - Works offline after the first visit
 
 You can also paste Markdown, start a new document, or open a public Markdown file from a URL.
 
 ## Opening files from the desktop
 
-The site can be installed as a desktop app from Chrome or Edge. After installation, allow file handling and choose Markdown Viewer as the default app for `.md`, `.markdown`, `.mdown`, or `.txt` files. Double-clicking one of those files will then open it in Markdown Viewer.
+The site can be installed as a desktop app from Chrome or Edge. After installation, allow file handling and choose Markdown Viewer by LunarPing as the default app for `.md`, `.markdown`, `.mdown`, or `.txt` files. Double-clicking one of those files will then open it in Markdown Viewer by LunarPing.
 
 If you installed the app before file handling was added, update or reinstall it so the operating system can pick up the new file associations.
 
@@ -60,10 +61,27 @@ Install the Playwright browsers first if needed:
 npx playwright install
 ```
 
-The production build uses `/markdown-viewer/` as its base path:
+The production build serves from `/`:
 
 ```bash
 npm run build
 ```
 
-Publish `dist/` to GitHub Pages, or use the workflow in `.github/workflows/pages.yml`.
+## Cloudflare Pages deployment
+
+Connect this GitHub repository to a Cloudflare Pages project with `main` as the production branch. Use these settings:
+
+| Setting                | Value           |
+| ---------------------- | --------------- |
+| Framework preset       | React (Vite)    |
+| Build command          | `npm run build` |
+| Build output directory | `dist`          |
+| Root directory         | Repository root |
+
+In **Workers & Pages → your project → Custom domains**, add `md.lunarping.com`. If `lunarping.com` is already a Cloudflare zone in the same account, Cloudflare adds the CNAME record during setup. Otherwise, add a CNAME for `md` pointing to the project's `*.pages.dev` hostname at the domain's DNS provider. Associate the hostname in Pages before adding the DNS record.
+
+The `public/_headers` and `public/_redirects` files are copied to `dist/` and applied by Cloudflare Pages. The GitHub Actions `CI` workflow checks code changes; deployment is handled by Cloudflare's Git integration.
+
+After the new domain is live, run the **Redirect legacy GitHub Pages** workflow manually from GitHub Actions. It replaces the old project site at `https://shekharroy.com/markdown-viewer/` with a redirect page pointing to the new domain. If the old hostname is routed through a service that supports HTTP redirects, configure a permanent `301` redirect there as well.
+
+Browser storage and installed app registrations are scoped to each origin. Before retiring the old site, export any unsaved drafts and reopen them on the new domain; reinstall the app if desktop file handling is used.

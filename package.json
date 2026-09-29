@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "A polished, fully client-side Markdown viewer and lightweight editor for local documents.",
-  "homepage": "https://shekharroy.com/markdown-viewer/",
+  "homepage": "https://md.lunarping.com/",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit -p tsconfig.app.json && vite build",

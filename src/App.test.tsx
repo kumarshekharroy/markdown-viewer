@@ -14,7 +14,10 @@ describe('App', () => {
   it('renders the example document in reading mode by default', async () => {
     render(<App />);
 
-    expect(screen.getAllByText('Markdown Viewer')).not.toHaveLength(0);
+    expect(document.querySelector('.header-title-area')).toHaveAttribute(
+      'aria-label',
+      'Markdown Viewer by LunarPing'
+    );
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Markdown Viewer Example/i })).toBeInTheDocument();
     });

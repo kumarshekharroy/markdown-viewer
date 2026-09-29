@@ -1,6 +1,6 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 
-const APP_PATH = '/markdown-viewer/';
+const APP_PATH = '/';
 
 test('loads the reader and toggles editing', async ({ page }) => {
   await page.goto(APP_PATH);
@@ -40,8 +40,8 @@ test('new Markdown files open as focused, empty editors', async ({ page }) => {
   await page.getByRole('button', { name: 'More actions' }).click();
   await page.locator('.menu-popover').getByRole('button', { name: 'New Markdown file' }).click();
 
-  await expect(page.locator('.title-block strong')).toHaveText('Untitled');
-  await expect(page.locator('.title-block strong')).toHaveAttribute('title', 'Untitled.md');
+  await expect(page.getByRole('tab', { selected: true })).toContainText('Untitled');
+  await expect(page.getByRole('tab', { selected: true })).toHaveAttribute('title', 'Untitled.md');
   await expect(page.locator('.cm-editor')).toBeVisible();
   await expect(page.locator('.cm-content')).toHaveText('');
   await expect(page.getByRole('button', { name: 'Done editing' })).toBeVisible();
@@ -78,6 +78,42 @@ test('tabs preserve separate unsaved drafts through switching and reload', async
   await expect(page.locator('.cm-content')).toContainText('# Second draft');
   await page.getByRole('tab').nth(1).click();
   await expect(page.locator('.cm-content')).toContainText('# First draft');
+});
+
+test('tabs can be reordered by dragging and keyboard, and keep their order after reload', async ({
+  page
+}) => {
+  test.skip(isCompactProject(test.info()), 'desktop tab dragging is tested with a mouse');
+  await page.goto(APP_PATH);
+  const input = page.locator('input[type="file"]:not([multiple])');
+  await input.setInputFiles({
+    name: 'Alpha.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('# Alpha')
+  });
+  await expect(page.getByRole('tab', { name: 'Alpha' })).toBeVisible();
+  await input.setInputFiles({
+    name: 'Beta.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('# Beta')
+  });
+  await expect(page.getByRole('tab', { name: 'Beta' })).toBeVisible();
+
+  await page
+    .getByRole('tab', { name: 'Beta' })
+    .dragTo(page.getByRole('tab', { name: 'Markdown Viewer Example' }), {
+      targetPosition: { x: 12, y: 20 }
+    });
+  await expect(page.getByRole('tab')).toHaveText(['Beta', 'Markdown Viewer Example', 'Alpha']);
+  await expect(page.getByRole('tab', { name: 'Beta' })).toHaveAttribute('aria-selected', 'true');
+
+  await page.getByRole('tab', { name: 'Beta' }).focus();
+  await page.getByRole('tab', { name: 'Beta' }).press('Alt+Shift+ArrowRight');
+  await expect(page.getByRole('tab')).toHaveText(['Markdown Viewer Example', 'Beta', 'Alpha']);
+
+  await page.waitForTimeout(450);
+  await page.reload();
+  await expect(page.getByRole('tab')).toHaveText(['Markdown Viewer Example', 'Beta', 'Alpha']);
 });
 
 test('closing one dirty tab requires confirmation without affecting another', async ({ page }) => {
@@ -232,13 +268,13 @@ test('new documents stay outside an open folder until that folder is reopened', 
   await expect(folderTree.getByRole('button', { name: 'notes', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'New Markdown file' }).click();
 
-  await expect(page.locator('.title-block strong')).toHaveText('Untitled');
+  await expect(page.getByRole('tab', { selected: true })).toContainText('Untitled');
   await expect(folderTree.getByRole('button', { name: /Untitled/i })).toHaveCount(0);
   await expect(folderTree.getByRole('button', { name: 'notes', exact: true })).toBeVisible();
 
   await page.waitForTimeout(450);
   await page.reload();
-  await expect(page.locator('.title-block strong')).toHaveText('Untitled');
+  await expect(page.getByRole('tab', { selected: true })).toContainText('Untitled');
   await expect(folderTree.getByRole('button', { name: /Untitled/i })).toHaveCount(0);
   await expect(folderTree.getByRole('button', { name: 'notes', exact: true })).toBeVisible();
 });
@@ -330,7 +366,8 @@ test('compact header keeps branding, filename, and upload control aligned', asyn
 
   await expect(page.locator('.brand-icon')).toBeVisible();
   await expect(page.locator('.app-name')).toHaveText('Markdown Viewer');
-  await expect(page.locator('.title-block strong')).toHaveText('Markdown Viewer Example');
+  await expect(page.locator('.brand-attribution')).toHaveText('by LunarPing');
+  await expect(page.getByRole('tab', { selected: true })).toContainText('Markdown Viewer Example');
   const viewport = page.viewportSize();
   if (viewport && viewport.width <= 520) {
     await expect
@@ -566,6 +603,36 @@ test('edge controls appear near the pointer without disturbing the document', as
   await expect(edge).toHaveCSS('opacity', '0');
   await page.keyboard.press('Tab');
   await edge.focus();
+  await expect(edge).toHaveCSS('opacity', '1');
+});
+
+test('editor edge controls wait at the panel boundary and stay off the editor', async ({
+  page
+}) => {
+  test.skip(isCompactProject(test.info()), 'mouse-only edge affordances are tested on desktop');
+  await page.goto(APP_PATH);
+  await page.getByRole('button', { name: 'Edit Markdown' }).click();
+
+  const edge = page.locator('.edge-toggle--left');
+  const panel = await page.locator('.file-panel').boundingBox();
+  const boundary = (panel?.x ?? 0) + (panel?.width ?? 0);
+  await page.mouse.move(boundary + 24, 430);
+  await expect(edge).toHaveCSS('opacity', '0');
+
+  await page.mouse.move(boundary - 8, 430);
+  await page.waitForTimeout(150);
+  await expect(edge).toHaveCSS('opacity', '0');
+  await expect(edge).toHaveCSS('opacity', '1');
+  const button = await edge.boundingBox();
+  expect((button?.x ?? 0) + (button?.width ?? 0)).toBeLessThanOrEqual(boundary + 1);
+
+  await page.mouse.move(boundary + 60, 430);
+  await expect(edge).toHaveCSS('opacity', '0');
+
+  await page.getByRole('button', { name: 'Hide file sidebar' }).click();
+  await page.mouse.move(6, 430);
+  await page.waitForTimeout(150);
+  await expect(edge).toHaveCSS('opacity', '0');
   await expect(edge).toHaveCSS('opacity', '1');
 });
 

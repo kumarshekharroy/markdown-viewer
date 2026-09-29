@@ -2,7 +2,7 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: '/markdown-viewer/',
+  base: '/',
   plugins: [react()],
   build: {
     target: 'es2021',
