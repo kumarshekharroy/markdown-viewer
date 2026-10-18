@@ -41,6 +41,7 @@ export interface DocumentState {
   sourceUrl?: string;
   path?: string;
   fileHandle?: FileSystemFileHandle;
+  desktopPath?: string;
   canDirectSave: boolean;
   lastModified?: number;
 }

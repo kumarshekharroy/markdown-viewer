@@ -1,6 +1,6 @@
 export const exampleDocument = `---
 title: Markdown Viewer Example
-author: Local browser session
+author: Local session
 tags:
   - markdown
   - private
@@ -8,9 +8,9 @@ tags:
 
 # Markdown Viewer Example
 
-Markdown Viewer by LunarPing is a read-first Markdown viewer with just enough editing power for quick corrections. Open a file, drop a folder, paste Markdown, or load public Markdown from a URL when the browser allows it. Inline snippets like \`example\` stay in the sentence instead of turning into blocks.
+Markdown Viewer by LunarPing is a read-first Markdown viewer with just enough editing power for quick corrections. Open or drop a Markdown file, paste Markdown, or load public Markdown from a URL. Inline snippets like \`example\` stay in the sentence instead of turning into blocks.
 
-> Your documents stay in this browser. Markdown Viewer by LunarPing does not upload files, phone home, or require an account.
+> Your local documents stay on your device. Markdown Viewer by LunarPing does not upload files, phone home, or require an account.
 
 ## What it renders
 
@@ -24,7 +24,7 @@ Markdown Viewer by LunarPing is a read-first Markdown viewer with just enough ed
 
 - [x] Read a local Markdown file
 - [x] Make a tiny edit
-- [ ] Save it back directly when the browser grants permission
+- [ ] Save changes to a local file after granting file access
 
 ## Code
 
@@ -40,8 +40,8 @@ export function describeMode(mode: ReaderMode) {
 
 | Capability | Where data lives | Notes |
 | --- | --- | --- |
-| Draft recovery | IndexedDB | Local to this browser |
-| Preferences | Browser storage | Theme, width, font size |
+| Draft recovery | Device storage | Unsaved work stays local |
+| Preferences | Local settings | Theme, width, font size |
 | Folder assets | Object URLs | Revoked when replaced |
 
 | Long capability label | Long location label | Long notes label |
@@ -70,5 +70,5 @@ flowchart LR
 
 Markdown Viewer by LunarPing keeps private Markdown files local by design.[^privacy]
 
-[^privacy]: Public URL loading uses the browser's normal fetch behavior, so CORS and network errors are surfaced instead of bypassed.
+[^privacy]: Public URL loading follows standard network and CORS rules. Remote images may contact their hosts, and network errors are reported without a proxy.
 `;

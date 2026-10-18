@@ -40,3 +40,8 @@ Thumbs.db
 
 # Local preview artifacts
 app/_sites-preview/
+
+# Desktop build output
+dist-desktop/
+src-tauri/target/
+src-tauri/gen/

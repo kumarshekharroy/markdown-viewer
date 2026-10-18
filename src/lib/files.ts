@@ -96,7 +96,7 @@ export async function saveToFileHandle(
 ): Promise<void> {
   const allowed = await verifyPermission(handle, 'readwrite');
   if (!allowed) {
-    throw new Error('The browser did not grant permission to update the original file.');
+    throw new Error('Permission to update the original file was not granted.');
   }
   const writable = await handle.createWritable();
   await writable.write(content);

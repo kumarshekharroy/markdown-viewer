@@ -201,7 +201,7 @@ export function PreferencesForm({
       </SettingsSection>
 
       <div className="settings-footer">
-        <p>Changes are saved automatically in this browser.</p>
+        <p>Changes are saved automatically on this device.</p>
         <button className="ghost-button" type="button" onClick={onReset}>
           <RotateCcw size={16} aria-hidden="true" />
           Reset all settings

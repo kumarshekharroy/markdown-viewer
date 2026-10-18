@@ -5,7 +5,17 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 
 export default [
-  { ignores: ['dist/**', 'coverage/**', 'playwright-report/**', 'test-results/**'] },
+  {
+    ignores: [
+      'dist/**',
+      'dist-desktop/**',
+      'src-tauri/target/**',
+      'src-tauri/gen/**',
+      'coverage/**',
+      'playwright-report/**',
+      'test-results/**'
+    ]
+  },
   js.configs.recommended,
   {
     files: ['public/sw.js'],

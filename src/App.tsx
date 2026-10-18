@@ -1,4 +1,5 @@
 import { usePanelResize } from './hooks/usePanelResize';
+import { isTauri } from '@tauri-apps/api/core';
 import { useWorkspacePersistence, loadFolderExpansion } from './hooks/useWorkspacePersistence';
 import { useReaderScroll } from './hooks/useReaderScroll';
 import { loadScrollPosition } from './lib/scrollPositions';
@@ -325,9 +326,23 @@ export default function App() {
         setRecent(recentDocuments);
         if (session?.document) {
           const legacyEntries = session.folder?.documents.filter(isLegacyUnsavedFolderEntry) ?? [];
-          const restoredTabs = session.tabs?.length
-            ? session.tabs
-            : [{ tabId: session.document.id, document: session.document, dirty: session.dirty }];
+          const restoredTabs = (
+            session.tabs?.length
+              ? session.tabs
+              : [{ tabId: session.document.id, document: session.document, dirty: session.dirty }]
+          ).map((tab) =>
+            isTauri()
+              ? {
+                  ...tab,
+                  document: {
+                    ...tab.document,
+                    desktopPath: undefined,
+                    fileHandle: undefined,
+                    canDirectSave: false
+                  }
+                }
+              : tab
+          );
           setTabs(
             restoredTabs.map((tab) => ({
               ...tab,
@@ -460,6 +475,54 @@ export default function App() {
   }, [anyDirty]);
 
   useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let confirming = false;
+    let unlisten: (() => void) | undefined;
+
+    const listen = async () => {
+      const [{ getCurrentWindow }, { ask }] = await Promise.all([
+        import('@tauri-apps/api/window'),
+        import('@tauri-apps/plugin-dialog')
+      ]);
+      if (disposed) return;
+      const stop = await getCurrentWindow().onCloseRequested(async (event) => {
+        if (confirming) {
+          event.preventDefault();
+          return;
+        }
+        if (!tabsRef.current.some((tab) => tab.dirty)) return;
+        confirming = true;
+        try {
+          const discard = await ask('Discard unsaved changes and close this window?', {
+            title: APP_NAME,
+            kind: 'warning',
+            okLabel: 'Discard changes',
+            cancelLabel: 'Keep editing'
+          });
+          if (!discard) event.preventDefault();
+        } catch (error) {
+          event.preventDefault();
+          announce(errorMessage(error, 'The close confirmation could not be shown.'), 'error');
+        } finally {
+          confirming = false;
+        }
+      });
+      if (disposed) stop();
+      else unlisten = stop;
+    };
+
+    listen().catch((error) => {
+      if (!disposed)
+        announce(errorMessage(error, 'The desktop close guard could not be started.'), 'error');
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [announce]);
+
+  useEffect(() => {
     const dirtyTabs = tabs.filter((tab) => tab.dirty);
     if (dirtyTabs.length === 0) return undefined;
     const timer = window.setTimeout(() => {
@@ -476,9 +539,7 @@ export default function App() {
             dirty: true
           })
         )
-      ).catch(() =>
-        announce('Draft recovery could not be updated in this browser session.', 'warning')
-      );
+      ).catch(() => announce('Draft recovery could not be updated on this device.', 'warning'));
     }, 700);
     return () => window.clearTimeout(timer);
   }, [announce, tabs]);
@@ -711,6 +772,20 @@ export default function App() {
   };
 
   const openFile = async () => {
+    if (isTauri()) {
+      try {
+        const { openDesktopMarkdown } = await import('./lib/desktopFiles');
+        const doc = await openDesktopMarkdown();
+        if (!doc) return;
+        applyDocument(doc, false);
+        await rememberDocument(doc);
+        announce('File opened. Direct save is available.', 'success');
+      } catch (error) {
+        announce(errorMessage(error, 'The file could not be opened.'), 'error');
+      }
+      return;
+    }
+
     if (window.showOpenFilePicker) {
       try {
         const [handle] = await window.showOpenFilePicker({
@@ -753,7 +828,9 @@ export default function App() {
       applyDocument(doc, false);
       await rememberDocument(doc);
       announce(
-        'File opened. Use Download updated file to keep changes because this browser did not grant direct file access.',
+        isTauri()
+          ? 'File opened. Use Save to choose where to keep your changes.'
+          : 'File opened. Use Download updated file to keep changes because this browser did not grant direct file access.',
         'success'
       );
     } catch (error) {
@@ -914,8 +991,32 @@ export default function App() {
     ]
   );
 
+  const saveDesktop = async (saveAs = false) => {
+    const { saveDesktopMarkdown } = await import('./lib/desktopFiles');
+    const saved = await saveDesktopMarkdown(documentState, saveAs);
+    if (!saved) return;
+
+    setTabs((current) =>
+      current.map((tab) =>
+        tab.document.id === saved.id
+          ? {
+              ...tab,
+              document: { ...saved, content: tab.document.content }
+            }
+          : tab
+      )
+    );
+    markSaved(saved);
+    announce('Markdown saved.', 'success');
+  };
+
   const saveDocument = async () => {
     try {
+      if (isTauri()) {
+        await saveDesktop();
+        return;
+      }
+
       if (documentState.fileHandle && documentState.canDirectSave) {
         await saveToFileHandle(documentState.fileHandle, documentState.content);
         markSaved(documentState);
@@ -935,6 +1036,11 @@ export default function App() {
 
   const saveAs = async () => {
     try {
+      if (isTauri()) {
+        await saveDesktop(true);
+        return;
+      }
+
       const direct = await pickSaveAs(
         filenameForMarkdown(documentState.title),
         documentState.content
@@ -1087,7 +1193,7 @@ export default function App() {
         const allowed = await verifyPermission(item.fileHandle, 'read');
         if (!allowed) {
           announce(
-            'The browser needs you to choose that file again before it can be reopened.',
+            'Choose that file again with Open to grant access before reopening it.',
             'warning'
           );
           return;
@@ -1103,7 +1209,7 @@ export default function App() {
         });
         applyDocument(doc, false);
         await rememberDocument(doc);
-        announce('Recent file reopened with browser permission.', 'success');
+        announce('Recent file reopened with permission.', 'success');
       } catch (error) {
         announce(errorMessage(error, 'The recent file could not be reopened.'), 'error');
       }
@@ -1116,16 +1222,13 @@ export default function App() {
       return;
     }
 
-    announce(
-      'Browsers cannot permanently reopen that local file without you granting access again.',
-      'warning'
-    );
+    announce('Choose this local file again with Open to grant access.', 'warning');
   };
 
   const clearData = async () => {
     if (
       !window.confirm(
-        'Clear recent documents, drafts, and reading preferences stored in this browser?'
+        "Clear this app's recent documents, drafts, and reading preferences? Saved files will not be deleted."
       )
     )
       return;
@@ -1134,7 +1237,7 @@ export default function App() {
     setRecoverableDrafts([]);
     setPreferences(DEFAULT_PREFS);
     setSplitRatio(50);
-    announce('Local application data cleared from this browser.', 'success');
+    announce('Local application data cleared.', 'success');
   };
 
   const restoreDraft = () => {
@@ -1153,7 +1256,7 @@ export default function App() {
       true
     );
     setRecoverableDrafts((current) => current.filter((draft) => draft.id !== recoverableDraft.id));
-    announce('Unsaved draft restored from this browser.', 'success');
+    announce('Unsaved draft restored from local storage.', 'success');
   };
 
   const discardDraft = async () => {
@@ -1430,7 +1533,7 @@ export default function App() {
             {dark ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
           </IconToggle>
           <MoreMenu
-            canDirectSave={documentState.canDirectSave}
+            canDirectSave={isTauri() || documentState.canDirectSave}
             dirty={dirty}
             onNew={createDocument}
             onSave={saveDocument}
@@ -1650,8 +1753,9 @@ export default function App() {
               {!window.showDirectoryPicker ? (
                 <div className="panel-section panel-section--compact">
                   <p className="browser-note">
-                    Folder access varies by browser. This browser uses a directory picker fallback
-                    when available.
+                    {isTauri()
+                      ? 'Folder import uses the system directory picker when available. Save edited files individually.'
+                      : 'Folder access varies by browser. This browser uses a directory picker fallback when available.'}
                   </p>
                 </div>
               ) : null}
@@ -1928,20 +2032,22 @@ export default function App() {
       >
         <div className="privacy-copy">
           <p>
-            Markdown Viewer by LunarPing runs entirely in this browser. Local files and opened
+            Markdown Viewer by LunarPing processes local documents on your device. Files and opened
             folders are never uploaded by the app, and there are no analytics, cookies, accounts, or
             tracking scripts.
           </p>
           <p>
-            Draft recovery stores unsaved Markdown in IndexedDB on this device. Recent documents
-            store metadata, and the current workspace stores open tabs, their unsaved Markdown, and
-            the folder tree so they can be restored after a reload. Where the browser supports it,
-            file handles still require permission before reuse.
+            Draft recovery stores unsaved Markdown on this device. Recent documents store metadata,
+            and the current workspace stores open tabs, their unsaved Markdown, and the folder tree
+            so they can be restored the next time you open the app.{' '}
+            {isTauri()
+              ? 'Native file access lasts for the current app session. After restarting, choose a file again with Open or select a destination with Save.'
+              : 'Where the browser supports it, file handles still require permission before reuse.'}
           </p>
           <p>
-            Loading a public URL uses the browser's normal network and CORS rules. Markdown Viewer
-            by LunarPing does not bypass private repository permissions or send content through a
-            server proxy.
+            Loading a public URL follows standard network and CORS rules. Remote images may also
+            contact their hosts. Markdown Viewer by LunarPing does not bypass private repository
+            permissions or send content through a server proxy.
           </p>
         </div>
       </Dialog>
