@@ -754,6 +754,43 @@ export default function App() {
     });
   }, [announce, applyDocument, rememberDocument, workspaceReady]);
 
+  useEffect(() => {
+    if (!isTauri() || !workspaceReady) return;
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    const reportError = (error: unknown) => {
+      if (!disposed)
+        announce(errorMessage(error, 'The file passed to the app could not be opened.'), 'error');
+    };
+    import('./lib/desktopFileLaunch')
+      .then(({ subscribeToDesktopFileLaunches }) => {
+        if (disposed) return;
+        unsubscribe = subscribeToDesktopFileLaunches(async (paths) => {
+          const { readDesktopMarkdown } = await import('./lib/desktopFiles');
+          for (const path of paths) {
+            const existing = tabsRef.current.find((tab) => tab.document.desktopPath === path);
+            if (existing) {
+              setActiveTabId(existing.tabId);
+              continue;
+            }
+            try {
+              const doc = await readDesktopMarkdown(path);
+              applyDocument(doc, false);
+              await rememberDocument(doc);
+              announce(`Opened ${doc.sourceLabel}. Direct save is available.`, 'success');
+            } catch (error) {
+              reportError(error);
+            }
+          }
+        }, reportError);
+      })
+      .catch(reportError);
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [announce, applyDocument, rememberDocument, workspaceReady]);
+
   const createDocument = async () => {
     const filename = nextUntitledFilename(folder, tabs);
     applyDocument(

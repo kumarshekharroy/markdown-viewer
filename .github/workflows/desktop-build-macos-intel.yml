@@ -1,0 +1,35 @@
+name: Desktop Build - macOS Intel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - run: npm ci
+
+      - name: Build Intel macOS installer
+        run: npm run tauri -- build --target x86_64-apple-darwin --bundles dmg
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: markdown-viewer-macos-intel
+          path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 90

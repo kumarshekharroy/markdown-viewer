@@ -22,13 +22,13 @@ The web and native desktop apps share the same React and TypeScript codebase. Vi
 | ----------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Website                 | Open [md.lunarping.com](https://md.lunarping.com/).                           | Open local files and folders. Save in place when the browser supports it, or download an updated copy.                |
 | Installed web app (PWA) | Install the website through a supported browser.                              | Uses the browser's file permissions. Supported Chrome and Edge installations can register Markdown file associations. |
-| Native desktop app      | Download a macOS or Windows installer from a successful desktop workflow run. | Uses native **Open**, **Save**, and **Save As** dialogs for individual Markdown files.                                |
+| Native desktop app      | Download a macOS or Windows installer from a successful desktop workflow run. | Opens associated Markdown files from Finder/Explorer and uses native **Open**, **Save**, and **Save As** dialogs.     |
 
 ### Browser and installed web app
 
 Use **Open** to select a document, **Edit Markdown** to edit it, and **Save** or **Save As** to keep your changes. When direct saving is unavailable, the browser downloads a copy and leaves the original file unchanged.
 
-In Chrome or Edge, install the site using the browser's app installation option. Where file handling is supported, allow it and choose Markdown Viewer by LunarPing as the default application for Markdown files. File associations depend on the browser and operating system. They belong to the installed web app; the native Tauri app currently opens files through its **Open** button.
+In Chrome or Edge, install the site using the browser's app installation option. Where file handling is supported, allow it and choose Markdown Viewer by LunarPing as the default application for Markdown files. PWA file associations depend on the browser and operating system. The native desktop app registers its own file associations during installation.
 
 The website caches resources for offline reuse. Opening a public URL or loading remote images still requires network access. Resources that have not been cached may also need an initial online visit.
 
@@ -36,18 +36,30 @@ The website caches resources for offline reuse. Opening a public URL or loading 
 
 To download an installer from this repository:
 
-1. Open **Actions → Desktop Build** and select a successful run.
+1. Open **Actions**, choose the workflow for your platform below, and select a successful run.
 2. Scroll to **Artifacts** and download the artifact for your platform.
 3. Extract the downloaded ZIP to access the installer.
 
-| Platform                       | Artifact                          | Installer                                                           |
-| ------------------------------ | --------------------------------- | ------------------------------------------------------------------- |
-| macOS, Apple Silicon and Intel | `markdown-viewer-macos-universal` | `.dmg`; open it and drag **Markdown Viewer** into **Applications**. |
-| Windows, x64                   | `markdown-viewer-windows-x64`     | `.exe`; run the NSIS installer.                                     |
+| Platform             | Workflow                                                                                 | Artifact                        | Installer                                               |
+| -------------------- | ---------------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------- |
+| macOS, Intel         | [Desktop Build - macOS Intel](.github/workflows/desktop-build-macos-intel.yml)           | `markdown-viewer-macos-intel`   | `.dmg`; drag **Markdown Viewer** into **Applications**. |
+| macOS, Apple Silicon | [Desktop Build - macOS Apple Silicon](.github/workflows/desktop-build-macos-silicon.yml) | `markdown-viewer-macos-silicon` | `.dmg`; drag **Markdown Viewer** into **Applications**. |
+| Windows, x64         | [Desktop Build - Windows](.github/workflows/desktop-build-windows.yml)                   | `markdown-viewer-windows-x64`   | `.exe`; run the NSIS installer.                         |
 
-The [Desktop Build workflow](.github/workflows/desktop-build.yml) is configured to build both installers on every push to any branch. It also supports manual runs through **Run workflow**. After both uploads succeed, cleanup keeps the newest complete installer pair: **two artifacts total**, one for macOS and one for Windows, across all branches. Older desktop artifacts from this workflow are removed; other workflows' artifacts are left alone. In-progress builds may temporarily have additional artifacts, and a failed build does not replace the retained pair.
+All three desktop workflows run **manually only**. To generate an installer, select its workflow under **Actions**, click **Run workflow**, choose a branch, and confirm **Run workflow**. Run each platform workflow separately as needed. GitHub requires the workflow files to be present on the repository's default branch for the manual-run button to appear; see [manually running a workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow). Pushes and pull requests do not trigger desktop builds.
 
-Uploads request GitHub's maximum retention: **90 days for public repositories** or **400 days for private repositories**. GitHub applies any lower repository or organization cap. For the longest permitted retention, set the retention limit under **Settings → Actions → General** to the maximum your repository allows. Retention is an age limit, so retained installers still expire if no replacement build is produced. See [GitHub's retention settings](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository).
+Each run uploads its own installer artifact with **90-day retention**. New builds leave previous artifacts in place; there is no cleanup job or two-artifact limit. GitHub expires each artifact according to its retention period. Repository or organization settings may impose a lower cap; configure at least 90 days under **Settings → Actions → General** to allow the full period. This setting applies to new uploads and does not change the expiration of existing artifacts. See [GitHub's retention settings](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository).
+
+### Open Markdown files from Finder or Explorer
+
+The native app registers `.md`, `.markdown`, `.mdown`, and `.txt` files as supported document types. After installing an updated build:
+
+- **macOS:** Quit the old app, copy the new **Markdown Viewer.app** into **Applications**, and launch it once. Right-click a Markdown file and choose **Open With → Markdown Viewer**. To make it the default for that extension, use **Get Info → Open with → Markdown Viewer → Change All**.
+- **Windows:** Run the updated installer, then right-click a Markdown file and choose **Open with → Choose another app → Markdown Viewer**. Set it as the default through Windows' file-type settings if desired.
+
+Files open in tabs in the existing application window, including when it is already running. Multiple selected files are opened individually. Reopening an already-open file selects its tab and preserves unsaved edits. The app receives access only to the files opened this way; it does not receive directory-wide access.
+
+Association changes require installing the new native bundle. Updating the website or running only the Vite server does not update Finder or Explorer registrations. On macOS, **Open With → Other… → Applications → Markdown Viewer.app** can select the installed app if Finder's menu has not refreshed yet.
 
 Builds and downloads use GitHub Actions; there is no automatic updater or GitHub Releases publishing step.
 
@@ -69,7 +81,7 @@ The website and native app have separate storage for drafts, preferences, and wo
 
 - Supported extensions are `.md`, `.markdown`, `.mdown`, and `.txt`.
 - Files must be UTF-8 text and no larger than 8 MB. Opening an empty file currently shows an error; use **New Markdown file** to start a blank document.
-- Native filesystem integration currently covers individual files. Native folder traversal and Finder/Explorer double-click file associations are not implemented.
+- Native filesystem integration currently covers individual files. Native folder traversal is not implemented.
 - Browser folder access, saving in place, and PWA file associations depend on browser support and permission settings.
 - Local images and links between Markdown files are resolved through the browser folder workspace. Opening a single file in the native app does not grant access to its neighboring files or images.
 - Draft recovery and window-close confirmation do not replace saving files before force-quitting the application or shutting down the computer.
@@ -175,7 +187,7 @@ On Windows, build an `.exe` installer:
 npm run tauri -- build --bundles nsis
 ```
 
-Local builds without an explicit target write installers beneath `src-tauri/target/release/bundle/`, in `dmg/` or `nsis/`. Passing `--target` adds a target directory, such as `src-tauri/target/universal-apple-darwin/release/bundle/dmg/`. The desktop workflow uses explicit targets for both platforms.
+Local builds without an explicit target write installers beneath `src-tauri/target/release/bundle/`, in `dmg/` or `nsis/`. Passing `--target` adds a target directory, such as `src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/`. The desktop workflows build separate Intel macOS, Apple Silicon macOS, and Windows installers using explicit targets. The universal macOS command above remains available for local builds.
 
 To build only the desktop frontend, without generating an installer:
 
@@ -212,19 +224,23 @@ npm run build:desktop
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-Verify Open, editing, Save, Save As, canceled dialogs, write failures, workspace restoration, and the unsaved-close prompt. Unit tests mock native APIs; a passing frontend test suite alone does not verify OS dialogs or installer behavior.
+Verify Open, editing, Save, Save As, canceled dialogs, write failures, workspace restoration, and the unsaved-close prompt. Also test Finder/Explorer **Open With** while the app is closed and already running, multiple selected files, and filenames containing spaces. Unit tests mock native APIs; a passing frontend test suite alone does not verify OS dialogs or installer behavior.
 
 ## Project layout
 
 ```text
 src/                                  Shared React UI, editor, rendering, and persistence
 src/lib/desktopFiles.ts                Native Markdown open/save operations
+src/lib/desktopFileLaunch.ts           Queue OS file launches until the workspace is ready
 public/                               Website assets, PWA manifest, and service worker
 vite.config.ts                        Web frontend configuration
 vite.desktop.config.ts                Desktop Vite configuration
 src-tauri/                            Tauri app, Rust dependencies, permissions, and icons
-.github/workflows/ci.yml               Web lint, tests, build, and browser checks
-.github/workflows/desktop-build.yml    macOS and Windows installer builds
+.github/workflows/
+  ci.yml                              Web lint, tests, build, and browser checks
+  desktop-build-macos-intel.yml        Manual Intel macOS installer build
+  desktop-build-macos-silicon.yml      Manual Apple Silicon macOS installer build
+  desktop-build-windows.yml            Manual Windows installer build
 ```
 
 Native calls are guarded with Tauri's `isTauri()` check and loaded only in the desktop runtime. The browser keeps its existing file-picker and download behavior. Service worker registration runs only in the web app; the desktop app loads its bundled frontend.
@@ -243,7 +259,7 @@ The production website is hosted at [md.lunarping.com](https://md.lunarping.com/
 
 Configure a custom domain in the Cloudflare Pages project if needed. The files `public/_headers` and `public/_redirects` are copied into the build and applied by Cloudflare Pages.
 
-The [CI workflow](.github/workflows/ci.yml) runs web checks on pushes to `main` and on pull requests. Cloudflare's Git integration handles website deployment. The desktop workflow runs independently and uploads installers as Actions artifacts.
+The [CI workflow](.github/workflows/ci.yml) runs web checks on pushes to `main` and on pull requests. Cloudflare's Git integration handles website deployment. The three desktop workflows run independently when manually requested and upload installers as Actions artifacts.
 
 The optional [legacy redirect workflow](.github/workflows/legacy-redirect.yml) publishes `legacy-redirect/` to the former GitHub Pages site. It is manually triggered and is separate from the website and desktop builds.
 

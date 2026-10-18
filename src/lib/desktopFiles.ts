@@ -13,6 +13,10 @@ export async function openDesktopMarkdown(): Promise<DocumentState | null> {
   const path = await open({ multiple: false, directory: false, filters });
   if (!path) return null;
 
+  return readDesktopMarkdown(path);
+}
+
+export async function readDesktopMarkdown(path: string): Promise<DocumentState> {
   const { readFile } = await import('@tauri-apps/plugin-fs');
   const bytes = await readFile(path);
   const name = filename(path);

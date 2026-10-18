@@ -1,6 +1,6 @@
 [package]
 name = "markdown-viewer"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [lib]
@@ -14,3 +14,4 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+tauri-plugin-single-instance = "2"

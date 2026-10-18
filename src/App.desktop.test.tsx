@@ -9,6 +9,8 @@ import type { DocumentState } from './types';
 const native = vi.hoisted(() => ({
   open: vi.fn(),
   save: vi.fn(),
+  read: vi.fn(),
+  subscribe: vi.fn(),
   ask: vi.fn(),
   onCloseRequested: vi.fn()
 }));
@@ -16,8 +18,10 @@ const native = vi.hoisted(() => ({
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }));
 vi.mock('./lib/desktopFiles', () => ({
   openDesktopMarkdown: native.open,
+  readDesktopMarkdown: native.read,
   saveDesktopMarkdown: native.save
 }));
+vi.mock('./lib/desktopFileLaunch', () => ({ subscribeToDesktopFileLaunches: native.subscribe }));
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ onCloseRequested: native.onCloseRequested })
 }));
@@ -35,6 +39,7 @@ vi.mock('./components/MarkdownEditor', () => ({
 beforeEach(async () => {
   Object.values(native).forEach((mock) => mock.mockReset());
   native.onCloseRequested.mockResolvedValue(vi.fn());
+  native.subscribe.mockReturnValue(vi.fn());
   localStorage.clear();
   await clearApplicationData();
 });
@@ -55,6 +60,47 @@ async function openNote() {
 }
 
 describe('desktop app file handling', () => {
+  it('opens OS-launched files in tabs and preserves unsaved edits when the same file is opened again', async () => {
+    const user = userEvent.setup();
+    const document = documentFromContent('# From Finder', 'finder-note', 'finder-note.md', {
+      desktopPath: '/notes/finder-note.md',
+      canDirectSave: true
+    });
+    native.read.mockResolvedValue(document);
+    render(<App />);
+    await waitFor(() => expect(native.subscribe).toHaveBeenCalledOnce());
+    const consume = native.subscribe.mock.calls[0][0];
+    await act(async () => consume(['/notes/finder-note.md']));
+
+    expect(screen.getByRole('heading', { name: 'From Finder' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Edit Markdown' }));
+    const editor = await screen.findByRole('textbox', { name: 'Markdown source' });
+    fireEvent.change(editor, { target: { value: '# Keep unsaved edits' } });
+    await act(async () => consume(['/notes/finder-note.md']));
+
+    expect(native.read).toHaveBeenCalledOnce();
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(editor).toHaveValue('# Keep unsaved edits');
+    expect(screen.getByRole('tab', { selected: true })).toHaveTextContent('●');
+  });
+
+  it('continues opening other OS-launched files when one is unreadable', async () => {
+    native.read.mockRejectedValueOnce(new Error('Unreadable file')).mockResolvedValueOnce(
+      documentFromContent('# Readable', 'readable', 'readable.md', {
+        desktopPath: '/notes/readable.md',
+        canDirectSave: true
+      })
+    );
+    render(<App />);
+    await waitFor(() => expect(native.subscribe).toHaveBeenCalledOnce());
+    await act(async () =>
+      native.subscribe.mock.calls[0][0](['/notes/broken.md', '/notes/readable.md'])
+    );
+
+    expect(screen.getByRole('heading', { name: 'Readable' })).toBeInTheDocument();
+    expect(native.read).toHaveBeenCalledTimes(2);
+  });
+
   it('uses desktop-appropriate privacy, settings, and example copy', async () => {
     const user = userEvent.setup();
     render(<App />);
